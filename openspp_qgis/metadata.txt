@@ -1,0 +1,34 @@
+[general]
+name=OpenSPP GIS
+qgisMinimumVersion=3.28
+description=Connect QGIS to OpenSPP for social protection program visualization and spatial analysis
+version=1.0.0
+author=OpenSPP.org
+email=info@openspp.org
+
+about=OpenSPP GIS plugin enables QGIS users to:
+    - View pre-computed GIS layers from OpenSPP (choropleths, indicators)
+    - Query registrant statistics for selected polygon areas
+    - Save geofences (areas of interest) to OpenSPP
+    - Export layers for offline use
+
+    This is a thin client plugin - all computation happens in OpenSPP/PostGIS.
+    The plugin displays pre-aggregated data for performance and privacy.
+
+tracker=https://github.com/OpenSPP/openspp-modules/issues
+repository=https://github.com/OpenSPP/openspp-modules
+homepage=https://openspp.org
+
+tags=social protection,GIS,spatial analysis,disaster response,anticipatory action
+
+category=Web
+icon=icons/openspp.svg
+experimental=True
+deprecated=False
+
+changelog=
+    1.0.0 - Initial release
+        - Layer catalog with auto-styling
+        - Spatial statistics query
+        - Geofence management
+        - Offline export (GeoPackage)
