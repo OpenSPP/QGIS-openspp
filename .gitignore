@@ -1,7 +1,28 @@
+# Python artifacts
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+
+# Build artifacts
 dist/
 build/
 *.zip
+
+# Environment files
+.env
+.env.*
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# IDE and editor files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
