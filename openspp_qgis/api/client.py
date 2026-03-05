@@ -64,6 +64,22 @@ class OpenSppClient:
         self._token_expires_at = 0
 
     @property
+    def token_expires_in(self) -> float:
+        """Seconds until the current token expires.
+
+        Returns 0 if no token has been acquired yet or if the token
+        is already expired. Used by the plugin to schedule the OAPIF
+        token refresh timer.
+
+        Returns:
+            Seconds remaining until expiry (0 if none or expired)
+        """
+        if not self._access_token:
+            return 0
+        remaining = self._token_expires_at - time.time()
+        return max(0, remaining)
+
+    @property
     def ogc_url(self) -> str:
         """OGC API - Features base URL for QGIS OAPIF connection.
 

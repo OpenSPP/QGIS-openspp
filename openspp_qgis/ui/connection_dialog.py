@@ -23,6 +23,8 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..auth import update_oapif_auth_token
+
 
 class ConnectionDialog(QDialog):
     """Dialog for configuring OpenSPP server connection.
@@ -427,9 +429,8 @@ class ConnectionDialog(QDialog):
     def _create_apiheader_auth_config(self, name, bearer_token):
         """Create a QGIS APIHeader auth config for OAPIF connection.
 
-        Uses QGIS's APIHeader auth method to inject a pre-acquired Bearer
-        token into HTTP request headers. The config map keys are HTTP header
-        names and values are header values.
+        Delegates to the shared update_oapif_auth_token() utility so
+        the same logic can be reused by the token refresh timer.
 
         Args:
             name: Connection name
@@ -438,69 +439,7 @@ class ConnectionDialog(QDialog):
         Returns:
             Auth config ID string, or None if creation failed
         """
-        try:
-            from qgis.core import QgsAuthMethodConfig
-
-            auth_manager = QgsApplication.authManager()
-            settings = QgsSettings()
-
-            header_map = {"Authorization": f"Bearer {bearer_token}"}
-
-            # Update existing config if present
-            existing_id = settings.value("openspp/oapif_auth_config_id", "")
-            if existing_id:
-                config = QgsAuthMethodConfig()
-                if auth_manager.loadAuthenticationConfig(existing_id, config, True):
-                    if config.method() == "APIHeader":
-                        config.setConfigMap(header_map)
-                        auth_manager.updateAuthenticationConfig(config)
-                        QgsMessageLog.logMessage(
-                            f"Updated APIHeader auth config '{existing_id}'",
-                            "OpenSPP",
-                            Qgis.Info,
-                        )
-                        return existing_id
-
-                    # Method is wrong (e.g. "OAuth2" from earlier attempt).
-                    # The method is immutable after creation in QGIS's auth DB,
-                    # so we must delete and recreate.
-                    QgsMessageLog.logMessage(
-                        f"Replacing auth config '{existing_id}' (method '{config.method()}' -> 'APIHeader')",
-                        "OpenSPP",
-                        Qgis.Info,
-                    )
-                    auth_manager.removeAuthenticationConfig(existing_id)
-                    settings.remove("openspp/oapif_auth_config_id")
-
-            # Create new APIHeader auth config
-            config = QgsAuthMethodConfig("APIHeader")
-            config.setName(f"OpenSPP Token - {name}")
-            config.setConfigMap(header_map)
-            config.setId(uuid.uuid4().hex[:7])
-
-            if auth_manager.storeAuthenticationConfig(config):
-                config_id = config.id()
-                settings.setValue("openspp/oapif_auth_config_id", config_id)
-                QgsMessageLog.logMessage(
-                    f"Created APIHeader auth config '{config_id}' for OAPIF",
-                    "OpenSPP",
-                    Qgis.Info,
-                )
-                return config_id
-
-            QgsMessageLog.logMessage(
-                "Failed to store APIHeader auth config in QGIS auth manager",
-                "OpenSPP",
-                Qgis.Warning,
-            )
-            return None
-        except Exception as e:
-            QgsMessageLog.logMessage(
-                f"Failed to create APIHeader auth config: {e}",
-                "OpenSPP",
-                Qgis.Warning,
-            )
-            return None
+        return update_oapif_auth_token(bearer_token, connection_name=name)
 
     def _create_auth_config(self, name, client_id, client_secret):
         """Store OAuth credentials in QGIS auth manager.

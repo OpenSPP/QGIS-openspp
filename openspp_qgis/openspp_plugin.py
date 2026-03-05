@@ -13,13 +13,15 @@ provider via the Browser panel. This plugin provides:
 import os
 import re
 import tempfile
+from urllib.parse import urlparse
 
 from qgis.core import Qgis, QgsApplication, QgsMessageLog, QgsProject, QgsVectorLayer
-from qgis.PyQt.QtCore import QCoreApplication, QSettings, Qt, QTranslator
+from qgis.PyQt.QtCore import QCoreApplication, QSettings, Qt, QTimer, QTranslator
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QMenu
+from qgis.PyQt.QtWidgets import QAction, QMenu, QToolButton
 
 from .api.client import OpenSppClient
+from .auth import update_oapif_auth_token
 from .ui.connection_dialog import ConnectionDialog
 from .ui.geofence_dialog import GeofenceDialog
 from .ui.proximity_dialog import ProximityDialog
@@ -67,8 +69,24 @@ class OpenSppPlugin:
         self.menu = None
         self.toolbar = None
 
+        # Connection QToolButton and its wrapper action (for cleanup)
+        self.connect_button = None
+        self.connect_button_action = None
+        self.connect_menu = None
+
+        # Named action references (also kept in self.actions for cleanup)
+        self.action_stats = None
+        self.action_proximity = None
+        self.action_geofence = None
+        self.action_export = None
+
         # API client (initialized on connection)
         self.client = None
+
+        # OAPIF token refresh timer
+        self._token_refresh_timer = None
+        # Retry interval when token refresh fails (60 seconds)
+        self._TOKEN_REFRESH_RETRY_MS = 60000
 
         # UI components
         self.stats_panel = None
@@ -143,35 +161,34 @@ class OpenSppPlugin:
         self.toolbar = self.iface.addToolBar(self.tr("OpenSPP"))
         self.toolbar.setObjectName("OpenSppToolbar")
 
-        # Get icon path
         icon_dir = os.path.join(self.plugin_dir, "icons")
 
-        # Connection action
-        self.add_action(
-            os.path.join(icon_dir, "connect.svg"),
-            self.tr("Connect to OpenSPP"),
-            self.show_connection_dialog,
-            status_tip=self.tr("Configure connection to OpenSPP server"),
-        )
+        # Connection QToolButton with dropdown menu
+        self._setup_connect_button(icon_dir)
 
         # Query stats action
-        self.add_action(
+        self.action_stats = self.add_action(
             os.path.join(icon_dir, "stats.svg"),
             self.tr("Query Statistics"),
             self.query_selected_features,
-            status_tip=self.tr("Query statistics for selected polygon(s)"),
+            status_tip=self.tr(
+                "Query statistics for selected polygon(s)"
+            ),
         )
 
         # Proximity query action
-        self.add_action(
+        self.action_proximity = self.add_action(
             os.path.join(icon_dir, "proximity.svg"),
             self.tr("Proximity Query"),
             self.query_proximity,
-            status_tip=self.tr("Find registrants within/beyond distance from reference points"),
+            status_tip=self.tr(
+                "Find registrants within/beyond distance "
+                "from reference points"
+            ),
         )
 
         # Save geofence action
-        self.add_action(
+        self.action_geofence = self.add_action(
             os.path.join(icon_dir, "geofence.svg"),
             self.tr("Save Geofence"),
             self.show_geofence_dialog,
@@ -179,42 +196,268 @@ class OpenSppPlugin:
         )
 
         # Export action
-        self.add_action(
+        self.action_export = self.add_action(
             os.path.join(icon_dir, "export.svg"),
             self.tr("Export for Offline"),
             self.export_geopackage,
-            status_tip=self.tr("Export layers as GeoPackage for offline use"),
+            status_tip=self.tr(
+                "Export layers as GeoPackage for offline use"
+            ),
         )
 
-        self.menu.addSeparator()
-
-        # Settings action
+        # Connection Settings (menu-only, accessibility fallback)
         self.add_action(
             os.path.join(icon_dir, "settings.svg"),
-            self.tr("Settings"),
+            self.tr("Connection Settings..."),
             self.show_settings,
             add_to_toolbar=False,
-            status_tip=self.tr("Plugin settings"),
+            status_tip=self.tr("Configure OpenSPP server connection"),
         )
 
-        # Load saved connection
+        # Disable action buttons until connected
+        self._set_actions_enabled(False)
+
+        # Load saved connection (may enable buttons)
         self._load_connection()
 
         # Connect QML auto-styling hook
         QgsProject.instance().layerWasAdded.connect(self._on_layer_added)
 
+    def _setup_connect_button(self, icon_dir):
+        """Create the connection QToolButton with dropdown menu.
+
+        Uses QToolButton.MenuButtonClick so clicking the button opens
+        the connection dialog, and the dropdown arrow shows a menu
+        with connect/disconnect options.
+
+        Args:
+            icon_dir: Path to icons directory
+        """
+        self.connect_button = QToolButton()
+        self.connect_button.setIcon(
+            QIcon(os.path.join(icon_dir, "connect.svg"))
+        )
+        self.connect_button.setText(self.tr("Connect to OpenSPP"))
+        self.connect_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.connect_button.setPopupMode(QToolButton.MenuButtonClick)
+        self.connect_button.clicked.connect(self.show_connection_dialog)
+
+        # Dropdown menu
+        self.connect_menu = QMenu()
+        self._rebuild_connect_menu()
+        self.connect_button.setMenu(self.connect_menu)
+
+        # Add to toolbar and store wrapper action for cleanup
+        self.connect_button_action = self.toolbar.addWidget(
+            self.connect_button
+        )
+
+        # Add "Connect to OpenSPP" to the plugin menu as well
+        connect_menu_action = QAction(
+            QIcon(os.path.join(icon_dir, "connect.svg")),
+            self.tr("Connect to OpenSPP"),
+            self.iface.mainWindow(),
+        )
+        connect_menu_action.triggered.connect(self.show_connection_dialog)
+        if self.menu:
+            self.menu.addAction(connect_menu_action)
+        self.actions.append(connect_menu_action)
+
+    def _rebuild_connect_menu(self):
+        """Rebuild the connect button's dropdown menu.
+
+        When disconnected: shows "Connect..."
+        When connected: shows server URL (disabled), "Change Connection...",
+        and "Disconnect"
+        """
+        self.connect_menu.clear()
+
+        if self.client:
+            # Show server URL as informational (disabled)
+            url_action = self.connect_menu.addAction(self.client.server_url)
+            url_action.setEnabled(False)
+            self.connect_menu.addSeparator()
+
+            change_action = self.connect_menu.addAction(
+                self.tr("Change Connection...")
+            )
+            change_action.triggered.connect(self.show_connection_dialog)
+
+            disconnect_action = self.connect_menu.addAction(
+                self.tr("Disconnect")
+            )
+            disconnect_action.triggered.connect(self._disconnect)
+        else:
+            connect_action = self.connect_menu.addAction(
+                self.tr("Connect...")
+            )
+            connect_action.triggered.connect(self.show_connection_dialog)
+
+    def _set_actions_enabled(self, enabled):
+        """Enable or disable the data action buttons.
+
+        Does NOT affect the connect button, which is always enabled.
+
+        Args:
+            enabled: True to enable, False to disable (gray out)
+        """
+        for action in [
+            self.action_stats,
+            self.action_proximity,
+            self.action_geofence,
+            self.action_export,
+        ]:
+            if action:
+                action.setEnabled(enabled)
+
+    def _update_connection_state(self):
+        """Update all UI elements to reflect current connection state.
+
+        Called after connect, disconnect, load, and token refresh failure.
+        Idempotent: safe to call multiple times with same state.
+        """
+        if self.client:
+            # Extract hostname from server URL for display
+            hostname = urlparse(self.client.server_url).hostname
+            display = hostname or self.client.server_url
+            if self.connect_button:
+                self.connect_button.setText(display)
+            self._set_actions_enabled(True)
+        else:
+            if self.connect_button:
+                self.connect_button.setText(
+                    self.tr("Connect to OpenSPP")
+                )
+            self._set_actions_enabled(False)
+
+        self._rebuild_connect_menu()
+
+    def _disconnect(self):
+        """Disconnect from the current server (session-only).
+
+        Clears the in-memory client and disables actions, but does NOT
+        delete saved credentials. Next QGIS launch will auto-reconnect.
+        """
+        self._stop_token_refresh_timer()
+        self.client = None
+        self._update_connection_state()
+        self.log("Disconnected from OpenSPP")
+
+    # === OAPIF Token Refresh ===
+
+    def _start_token_refresh_timer(self):
+        """Schedule the OAPIF token refresh timer.
+
+        Fires before the token expires so the Browser panel's OAPIF
+        connection stays authenticated. Uses the client's token_expires_in
+        to schedule accurately.
+        """
+        self._stop_token_refresh_timer()
+
+        if not self.client:
+            return
+
+        expires_in = self.client.token_expires_in
+        if expires_in <= 0:
+            # No valid token yet; try refreshing soon
+            interval_ms = self._TOKEN_REFRESH_RETRY_MS
+        else:
+            # Schedule refresh for when the token is about to expire.
+            # The client already subtracts TOKEN_REFRESH_MARGIN_SECONDS
+            # from _token_expires_at, so token_expires_in already
+            # accounts for the margin. Refresh slightly before that.
+            interval_ms = max(
+                int(expires_in * 1000) - 30000,
+                self._TOKEN_REFRESH_RETRY_MS,
+            )
+
+        self._token_refresh_timer = QTimer()
+        self._token_refresh_timer.setSingleShot(True)
+        self._token_refresh_timer.timeout.connect(
+            self._on_token_refresh
+        )
+        self._token_refresh_timer.start(interval_ms)
+
+        self.log(
+            f"Token refresh scheduled in "
+            f"{interval_ms / 1000:.0f}s"
+        )
+
+    def _stop_token_refresh_timer(self):
+        """Stop and clean up the token refresh timer."""
+        if self._token_refresh_timer:
+            self._token_refresh_timer.stop()
+            self._token_refresh_timer = None
+
+    def _on_token_refresh(self):
+        """Handle token refresh timer firing.
+
+        Refreshes the JWT token and updates the OAPIF APIHeader
+        auth config so the Browser panel stays authenticated.
+        """
+        if not self.client:
+            return
+
+        try:
+            token = self.client.get_token()
+            update_oapif_auth_token(token)
+            self.log("OAPIF token refreshed")
+            # Reschedule for next cycle
+            self._start_token_refresh_timer()
+
+        except Exception as e:
+            self.log(
+                f"OAPIF token refresh failed: {e}",
+                Qgis.Warning,
+            )
+            # Retry on shorter interval
+            self._token_refresh_timer = QTimer()
+            self._token_refresh_timer.setSingleShot(True)
+            self._token_refresh_timer.timeout.connect(
+                self._on_token_refresh
+            )
+            self._token_refresh_timer.start(
+                self._TOKEN_REFRESH_RETRY_MS
+            )
+
     def unload(self):
         """Remove plugin menu items and icons."""
+        # Stop token refresh timer
+        self._stop_token_refresh_timer()
+
         # Disconnect QML auto-styling hook
         try:
-            QgsProject.instance().layerWasAdded.disconnect(self._on_layer_added)
+            QgsProject.instance().layerWasAdded.disconnect(
+                self._on_layer_added
+            )
         except TypeError:
             pass  # Already disconnected
 
+        # Remove connect button wrapper action from toolbar
+        if self.connect_button_action and self.toolbar:
+            self.toolbar.removeAction(self.connect_button_action)
+        self.connect_button_action = None
+
+        # Clean up connect button and its menu
+        if self.connect_menu:
+            self.connect_menu.deleteLater()
+            self.connect_menu = None
+        if self.connect_button:
+            self.connect_button.deleteLater()
+            self.connect_button = None
+
         # Remove actions
         for action in self.actions:
-            self.iface.removePluginMenu(self.tr("&OpenSPP"), action)
+            self.iface.removePluginMenu(
+                self.tr("&OpenSPP"), action
+            )
             self.iface.removeToolBarIcon(action)
+
+        # Clear named action references
+        self.action_stats = None
+        self.action_proximity = None
+        self.action_geofence = None
+        self.action_export = None
 
         # Remove menu
         if self.menu:
@@ -241,25 +484,36 @@ class OpenSppPlugin:
         """Load saved connection settings.
 
         Retrieves the server URL from QSettings and OAuth credentials
-        from the QGIS auth manager (encrypted storage).
+        from the QGIS auth manager (encrypted storage). "Connected"
+        on startup means credentials are loaded, not that the server
+        has been verified as reachable.
         """
         settings = QSettings()
         server_url = settings.value("openspp/server_url", "")
         if not server_url:
+            self._update_connection_state()
             return
 
         # Retrieve OAuth credentials from QGIS auth manager
         credentials = self._get_credentials_from_auth_manager()
         if not credentials:
             self.log(
-                "Server URL found but no OAuth credentials in auth manager. "
-                "Please reconnect via the connection dialog.",
+                "Server URL found but no OAuth credentials "
+                "in auth manager. Please reconnect via the "
+                "connection dialog.",
                 Qgis.Warning,
             )
+            self._update_connection_state()
             return
 
-        self.client = OpenSppClient(server_url, credentials["client_id"], credentials["client_secret"])
+        self.client = OpenSppClient(
+            server_url,
+            credentials["client_id"],
+            credentials["client_secret"],
+        )
         self.log(f"Loaded connection to {server_url}")
+        self._update_connection_state()
+        self._start_token_refresh_timer()
 
     def _get_credentials_from_auth_manager(self):
         """Retrieve OAuth credentials from QGIS auth manager.
@@ -409,20 +663,27 @@ class OpenSppPlugin:
             client_id = dialog.client_id
             client_secret = dialog.client_secret
 
-            # Create client (dialog already tested connection, no need to re-test)
-            self.client = OpenSppClient(server_url, client_id, client_secret)
+            # Create client (dialog already tested connection)
+            self.client = OpenSppClient(
+                server_url, client_id, client_secret
+            )
             self._save_connection(server_url)
+            self._update_connection_state()
+            self._start_token_refresh_timer()
 
-            # QGIS automatically refreshes the browser when connection settings change.
-            # No explicit reload needed (explicit reload during QGIS's internal rebuild
-            # can cause use-after-free crashes in QgsDataItem::path).
+            # QGIS automatically refreshes the browser when
+            # connection settings change. No explicit reload needed
+            # (explicit reload during QGIS's internal rebuild can
+            # cause use-after-free crashes in QgsDataItem::path).
 
             self.iface.messageBar().pushSuccess(
                 self.tr("OpenSPP"),
                 self.tr(
-                    "Connected successfully. Layers will appear in the QGIS Browser panel "
-                    "under 'WFS / OGC API - Features' within a few seconds. "
-                    "Press F5 in the Browser panel if needed."
+                    "Connected successfully. Layers will appear "
+                    "in the QGIS Browser panel under "
+                    "'WFS / OGC API - Features' within a few "
+                    "seconds. Press F5 in the Browser panel "
+                    "if needed."
                 ),
             )
 
@@ -502,8 +763,12 @@ class OpenSppPlugin:
                 return
 
             # Show progress message
+            msg_text = self.tr(
+                f"Querying statistics for "
+                f"{len(geometries)} feature(s)..."
+            )
             msg_bar = self.iface.messageBar().createMessage(
-                self.tr("OpenSPP"), self.tr(f"Querying statistics for {len(geometries)} feature(s)...")
+                self.tr("OpenSPP"), msg_text
             )
             self.iface.messageBar().pushWidget(msg_bar, Qgis.Info)
 
@@ -637,7 +902,11 @@ class OpenSppPlugin:
 
             self.iface.messageBar().pushSuccess(
                 self.tr("OpenSPP"),
-                self.tr(f"Proximity query completed: {result.get('total_count', 0):,} registrants found"),
+                self.tr(
+                    f"Proximity query completed: "
+                    f"{result.get('total_count', 0):,} "
+                    f"registrants found"
+                ),
             )
 
         except json.JSONDecodeError as e:
@@ -790,6 +1059,5 @@ class OpenSppPlugin:
             )
 
     def show_settings(self):
-        """Show plugin settings dialog."""
-        # For now, just show connection dialog
+        """Show connection settings (alias for connection dialog)."""
         self.show_connection_dialog()

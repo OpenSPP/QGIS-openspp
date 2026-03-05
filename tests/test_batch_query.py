@@ -10,7 +10,7 @@ class TestQueryStatisticsBatch:
 
     def _make_client(self):
         """Create a client with mocked network."""
-        client = OpenSppClient("https://test.example.com", "test-api-key")
+        client = OpenSppClient("https://test.example.com", "cid", "csecret")
         return client
 
     def test_batch_query_sends_correct_payload(self):
@@ -115,7 +115,7 @@ class TestGetPublishedStatistics:
 
     def test_get_statistics_calls_endpoint(self):
         """Test that statistics discovery calls the right endpoint."""
-        client = OpenSppClient("https://test.example.com", "test-api-key")
+        client = OpenSppClient("https://test.example.com", "cid", "csecret")
 
         expected = {
             "categories": [
@@ -144,7 +144,7 @@ class TestGetPublishedStatistics:
 
     def test_get_statistics_caches_result(self):
         """Test that statistics are cached after first call."""
-        client = OpenSppClient("https://test.example.com", "test-api-key")
+        client = OpenSppClient("https://test.example.com", "cid", "csecret")
 
         expected = {"categories": [], "total_count": 0}
 
@@ -159,7 +159,7 @@ class TestGetPublishedStatistics:
 
     def test_get_statistics_force_refresh(self):
         """Test that force_refresh bypasses cache."""
-        client = OpenSppClient("https://test.example.com", "test-api-key")
+        client = OpenSppClient("https://test.example.com", "cid", "csecret")
 
         expected = {"categories": [], "total_count": 0}
 

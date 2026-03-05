@@ -107,6 +107,7 @@ def _create_mock_qgis_modules():
         "QMessageBox",
         "QAction",
         "QMenu",
+        "QToolButton",
         "QFileDialog",
         "QComboBox",
         "QTextEdit",
