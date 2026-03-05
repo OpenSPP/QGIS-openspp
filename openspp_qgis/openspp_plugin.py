@@ -239,7 +239,7 @@ class OpenSppPlugin:
         )
         self.connect_button.setText(self.tr("Connect to OpenSPP"))
         self.connect_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.connect_button.setPopupMode(QToolButton.MenuButtonClick)
+        self.connect_button.setPopupMode(QToolButton.MenuButtonPopup)
         self.connect_button.clicked.connect(self.show_connection_dialog)
 
         # Dropdown menu
