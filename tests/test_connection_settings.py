@@ -151,12 +151,17 @@ class TestWriteConnectionSettings:
         assert any("My OpenSPP Server" in k for k in keys)
 
 
-class TestCreateApiHeaderAuthConfig:
-    """Test _create_apiheader_auth_config creates correct auth configs."""
+class TestUpdateOapifAuthToken:
+    """Test the shared update_oapif_auth_token function."""
+
+    # Patch paths target the auth module where the function lives
+    _APP_PATCH = "openspp_qgis.auth.QgsApplication"
+    _SETTINGS_PATCH = "openspp_qgis.auth.QgsSettings"
+    _AUTH_CONFIG_PATCH = "qgis.core.QgsAuthMethodConfig"
 
     def test_creates_apiheader_method(self):
         """Auth config uses 'APIHeader' method, not 'OAuth2'."""
-        dialog = _make_dialog()
+        from openspp_qgis.auth import update_oapif_auth_token
 
         mock_config = MagicMock()
         mock_config.id.return_value = "abc1234"
@@ -168,18 +173,18 @@ class TestCreateApiHeaderAuthConfig:
         mock_settings.value.return_value = ""
 
         with (
-            patch("openspp_qgis.ui.connection_dialog.QgsApplication") as mock_app,
-            patch("openspp_qgis.ui.connection_dialog.QgsSettings", return_value=mock_settings),
-            patch(_AUTH_CONFIG_PATCH, return_value=mock_config) as MockConfig,
+            patch(self._APP_PATCH) as mock_app,
+            patch(self._SETTINGS_PATCH, return_value=mock_settings),
+            patch(self._AUTH_CONFIG_PATCH, return_value=mock_config) as MockCfg,
         ):
             mock_app.authManager.return_value = mock_auth_manager
-            dialog._create_apiheader_auth_config("Test", "my-jwt-token")
+            update_oapif_auth_token("my-jwt-token", connection_name="Test")
 
-        MockConfig.assert_called_once_with("APIHeader")
+        MockCfg.assert_called_once_with("APIHeader")
 
     def test_config_map_has_authorization_header(self):
         """Config map contains Authorization: Bearer {token}."""
-        dialog = _make_dialog()
+        from openspp_qgis.auth import update_oapif_auth_token
 
         mock_config = MagicMock()
         mock_config.id.return_value = "abc1234"
@@ -190,18 +195,20 @@ class TestCreateApiHeaderAuthConfig:
         mock_settings.value.return_value = ""
 
         with (
-            patch("openspp_qgis.ui.connection_dialog.QgsApplication") as mock_app,
-            patch("openspp_qgis.ui.connection_dialog.QgsSettings", return_value=mock_settings),
-            patch(_AUTH_CONFIG_PATCH, return_value=mock_config),
+            patch(self._APP_PATCH) as mock_app,
+            patch(self._SETTINGS_PATCH, return_value=mock_settings),
+            patch(self._AUTH_CONFIG_PATCH, return_value=mock_config),
         ):
             mock_app.authManager.return_value = mock_auth_manager
-            dialog._create_apiheader_auth_config("Test", "eyJhbGciOi.payload.sig")
+            update_oapif_auth_token("eyJ.payload.sig", connection_name="Test")
 
-        mock_config.setConfigMap.assert_called_once_with({"Authorization": "Bearer eyJhbGciOi.payload.sig"})
+        mock_config.setConfigMap.assert_called_once_with(
+            {"Authorization": "Bearer eyJ.payload.sig"}
+        )
 
     def test_returns_config_id_on_success(self):
         """Returns the auth config ID string on successful creation."""
-        dialog = _make_dialog()
+        from openspp_qgis.auth import update_oapif_auth_token
 
         mock_config = MagicMock()
         mock_config.id.return_value = "x9y8z7w"
@@ -212,18 +219,18 @@ class TestCreateApiHeaderAuthConfig:
         mock_settings.value.return_value = ""
 
         with (
-            patch("openspp_qgis.ui.connection_dialog.QgsApplication") as mock_app,
-            patch("openspp_qgis.ui.connection_dialog.QgsSettings", return_value=mock_settings),
-            patch(_AUTH_CONFIG_PATCH, return_value=mock_config),
+            patch(self._APP_PATCH) as mock_app,
+            patch(self._SETTINGS_PATCH, return_value=mock_settings),
+            patch(self._AUTH_CONFIG_PATCH, return_value=mock_config),
         ):
             mock_app.authManager.return_value = mock_auth_manager
-            result = dialog._create_apiheader_auth_config("Test", "token")
+            result = update_oapif_auth_token("token")
 
         assert result == "x9y8z7w"
 
     def test_returns_none_on_store_failure(self):
         """Returns None if auth manager fails to store config."""
-        dialog = _make_dialog()
+        from openspp_qgis.auth import update_oapif_auth_token
 
         mock_config = MagicMock()
         mock_auth_manager = MagicMock()
@@ -233,18 +240,18 @@ class TestCreateApiHeaderAuthConfig:
         mock_settings.value.return_value = ""
 
         with (
-            patch("openspp_qgis.ui.connection_dialog.QgsApplication") as mock_app,
-            patch("openspp_qgis.ui.connection_dialog.QgsSettings", return_value=mock_settings),
-            patch(_AUTH_CONFIG_PATCH, return_value=mock_config),
+            patch(self._APP_PATCH) as mock_app,
+            patch(self._SETTINGS_PATCH, return_value=mock_settings),
+            patch(self._AUTH_CONFIG_PATCH, return_value=mock_config),
         ):
             mock_app.authManager.return_value = mock_auth_manager
-            result = dialog._create_apiheader_auth_config("Test", "token")
+            result = update_oapif_auth_token("token")
 
         assert result is None
 
     def test_updates_existing_config(self):
         """Updates existing config instead of creating new one."""
-        dialog = _make_dialog()
+        from openspp_qgis.auth import update_oapif_auth_token
 
         mock_config = MagicMock()
         mock_config.method.return_value = "APIHeader"
@@ -255,26 +262,24 @@ class TestCreateApiHeaderAuthConfig:
         mock_settings.value.return_value = "existing123"
 
         with (
-            patch("openspp_qgis.ui.connection_dialog.QgsApplication") as mock_app,
-            patch("openspp_qgis.ui.connection_dialog.QgsSettings", return_value=mock_settings),
-            patch(_AUTH_CONFIG_PATCH, return_value=mock_config),
+            patch(self._APP_PATCH) as mock_app,
+            patch(self._SETTINGS_PATCH, return_value=mock_settings),
+            patch(self._AUTH_CONFIG_PATCH, return_value=mock_config),
         ):
             mock_app.authManager.return_value = mock_auth_manager
-            result = dialog._create_apiheader_auth_config("Test", "new-token")
+            result = update_oapif_auth_token("new-token")
 
         mock_auth_manager.updateAuthenticationConfig.assert_called_once()
         mock_auth_manager.storeAuthenticationConfig.assert_not_called()
         assert result == "existing123"
 
-    def test_deletes_and_recreates_config_with_wrong_method_key(self):
-        """Deletes config with wrong method key and creates fresh APIHeader config."""
-        dialog = _make_dialog()
+    def test_deletes_and_recreates_wrong_method(self):
+        """Deletes config with wrong method and creates fresh APIHeader."""
+        from openspp_qgis.auth import update_oapif_auth_token
 
-        # The existing config has wrong method "HttpHeader"
         mock_old_config = MagicMock()
         mock_old_config.method.return_value = "HttpHeader"
 
-        # The new config that gets created
         mock_new_config = MagicMock()
         mock_new_config.id.return_value = "new7890"
 
@@ -285,27 +290,28 @@ class TestCreateApiHeaderAuthConfig:
         mock_settings = MagicMock()
         mock_settings.value.return_value = "existing123"
 
-        # First call returns old config (for load), second call returns new config (for create)
         config_calls = [mock_old_config, mock_new_config]
 
         with (
-            patch("openspp_qgis.ui.connection_dialog.QgsApplication") as mock_app,
-            patch("openspp_qgis.ui.connection_dialog.QgsSettings", return_value=mock_settings),
-            patch(_AUTH_CONFIG_PATCH, side_effect=config_calls),
+            patch(self._APP_PATCH) as mock_app,
+            patch(self._SETTINGS_PATCH, return_value=mock_settings),
+            patch(self._AUTH_CONFIG_PATCH, side_effect=config_calls),
         ):
             mock_app.authManager.return_value = mock_auth_manager
-            result = dialog._create_apiheader_auth_config("Test", "new-token")
+            result = update_oapif_auth_token("new-token")
 
-        # Old config should be deleted
-        mock_auth_manager.removeAuthenticationConfig.assert_called_once_with("existing123")
-        # New config should be created with correct method
-        mock_new_config.setConfigMap.assert_called_once_with({"Authorization": "Bearer new-token"})
+        mock_auth_manager.removeAuthenticationConfig.assert_called_once_with(
+            "existing123"
+        )
+        mock_new_config.setConfigMap.assert_called_once_with(
+            {"Authorization": "Bearer new-token"}
+        )
         mock_auth_manager.storeAuthenticationConfig.assert_called_once()
         assert result == "new7890"
 
     def test_saves_config_id_to_settings(self):
-        """Stores auth config ID in openspp/oapif_auth_config_id setting."""
-        dialog = _make_dialog()
+        """Stores auth config ID in openspp/oapif_auth_config_id."""
+        from openspp_qgis.auth import update_oapif_auth_token
 
         mock_config = MagicMock()
         mock_config.id.return_value = "new1234"
@@ -316,14 +322,29 @@ class TestCreateApiHeaderAuthConfig:
         mock_settings.value.return_value = ""
 
         with (
-            patch("openspp_qgis.ui.connection_dialog.QgsApplication") as mock_app,
-            patch("openspp_qgis.ui.connection_dialog.QgsSettings", return_value=mock_settings),
-            patch(_AUTH_CONFIG_PATCH, return_value=mock_config),
+            patch(self._APP_PATCH) as mock_app,
+            patch(self._SETTINGS_PATCH, return_value=mock_settings),
+            patch(self._AUTH_CONFIG_PATCH, return_value=mock_config),
         ):
             mock_app.authManager.return_value = mock_auth_manager
-            dialog._create_apiheader_auth_config("Test", "token")
+            update_oapif_auth_token("token")
 
-        mock_settings.setValue.assert_any_call("openspp/oapif_auth_config_id", "new1234")
+        mock_settings.setValue.assert_any_call(
+            "openspp/oapif_auth_config_id", "new1234"
+        )
+
+    def test_dialog_delegates_to_shared_function(self):
+        """ConnectionDialog._create_apiheader_auth_config delegates."""
+        dialog = _make_dialog()
+
+        with patch(
+            "openspp_qgis.ui.connection_dialog.update_oapif_auth_token",
+            return_value="auth123",
+        ) as mock_fn:
+            result = dialog._create_apiheader_auth_config("Test", "tok")
+
+        mock_fn.assert_called_once_with("tok", connection_name="Test")
+        assert result == "auth123"
 
 
 class TestCreateOapifConnection:
