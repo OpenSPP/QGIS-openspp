@@ -538,92 +538,62 @@ class TestParseRetryAfter:
 
 
 class TestBlockingRequest:
-    """Test OpenSppClient._blocking_request (thread-safe HTTP)."""
+    """Test OpenSppClient._blocking_request (thread-safe HTTP via urllib)."""
 
     def _make_client(self):
         return OpenSppClient("https://test.example.com", "cid", "csecret")
 
-    def _mock_blocking_get(self, client, mock_blocking):
-        """Patch _make_request and QgsBlockingNetworkRequest for a GET test."""
-        return patch.object(client, "_make_request", return_value=MagicMock()), \
-            patch("openspp_qgis.api.client.QgsBlockingNetworkRequest",
-                  return_value=mock_blocking)
-
     def test_blocking_request_get(self):
-        """Test that _blocking_request performs a GET request."""
+        """Test that _blocking_request delegates to _urllib_request for GET."""
         client = self._make_client()
 
-        mock_reply = MagicMock()
-        mock_reply.content.return_value.data.return_value = b'{"status": "ok"}'
-        mock_reply.attribute.return_value = 200
-        mock_reply.rawHeaderList.return_value = []
-
-        mock_blocking = MagicMock()
-        mock_blocking.get.return_value = 0  # NoError
-        mock_blocking.reply.return_value = mock_reply
-
-        with patch.object(client, "_make_request", return_value=MagicMock()):
-            with patch(
-                "openspp_qgis.api.client.QgsBlockingNetworkRequest",
-                return_value=mock_blocking,
-            ):
-                result = client._blocking_request("/ogc/processes")
+        with patch.object(
+            client, "_urllib_request", return_value={"status": "ok"}
+        ) as mock_urllib:
+            result = client._blocking_request("/ogc/processes")
 
         assert result == {"status": "ok"}
-        mock_blocking.get.assert_called_once()
+        mock_urllib.assert_called_once()
+        call_kwargs = mock_urllib.call_args[1]
+        assert call_kwargs["method"] == "GET"
 
     def test_blocking_request_post(self):
-        """Test that _blocking_request performs a POST request."""
+        """Test that _blocking_request delegates to _urllib_request for POST."""
         client = self._make_client()
 
-        mock_reply = MagicMock()
-        mock_reply.content.return_value.data.return_value = b'{"total_count": 42}'
-        mock_reply.attribute.return_value = 200
-        mock_reply.rawHeaderList.return_value = []
-
-        mock_blocking = MagicMock()
-        mock_blocking.post.return_value = 0
-        mock_blocking.reply.return_value = mock_reply
-
-        with patch.object(client, "_make_request", return_value=MagicMock()):
-            with patch(
-                "openspp_qgis.api.client.QgsBlockingNetworkRequest",
-                return_value=mock_blocking,
-            ):
-                result = client._blocking_request(
-                    "/ogc/processes/spatial-statistics/execution",
-                    method="POST",
-                    data={"inputs": {"geometry": {}}},
-                )
+        with patch.object(
+            client, "_urllib_request", return_value={"total_count": 42}
+        ) as mock_urllib:
+            result = client._blocking_request(
+                "/ogc/processes/spatial-statistics/execution",
+                method="POST",
+                data={"inputs": {"geometry": {}}},
+            )
 
         assert result == {"total_count": 42}
-        mock_blocking.post.assert_called_once()
+        call_kwargs = mock_urllib.call_args[1]
+        assert call_kwargs["method"] == "POST"
+        assert call_kwargs["data"] == {"inputs": {"geometry": {}}}
 
     def test_blocking_request_full_response(self):
         """Test full_response mode returns (status, headers, body) tuple."""
         client = self._make_client()
 
-        mock_reply = MagicMock()
-        mock_reply.content.return_value.data.return_value = b'{"jobID": "abc"}'
-        mock_reply.attribute.return_value = 201
-        mock_reply.rawHeaderList.return_value = [b"Location"]
-        mock_reply.rawHeader.return_value = b"/api/v2/spp/gis/ogc/jobs/abc"
-
-        mock_blocking = MagicMock()
-        mock_blocking.post.return_value = 0
-        mock_blocking.reply.return_value = mock_reply
-
-        with patch.object(client, "_make_request", return_value=MagicMock()):
-            with patch(
-                "openspp_qgis.api.client.QgsBlockingNetworkRequest",
-                return_value=mock_blocking,
-            ):
-                status, headers, body = client._blocking_request(
-                    "/ogc/processes/spatial-statistics/execution",
-                    method="POST",
-                    data={"inputs": {}},
-                    full_response=True,
-                )
+        with patch.object(
+            client,
+            "_urllib_request",
+            return_value=(
+                201,
+                {"Location": "/api/v2/spp/gis/ogc/jobs/abc"},
+                {"jobID": "abc"},
+            ),
+        ):
+            status, headers, body = client._blocking_request(
+                "/ogc/processes/spatial-statistics/execution",
+                method="POST",
+                data={"inputs": {}},
+                full_response=True,
+            )
 
         assert status == 201
         assert headers["Location"] == "/api/v2/spp/gis/ogc/jobs/abc"
@@ -633,17 +603,13 @@ class TestBlockingRequest:
         """Test that network errors raise exceptions."""
         client = self._make_client()
 
-        mock_blocking = MagicMock()
-        mock_blocking.get.return_value = 1  # Error code
-        mock_blocking.errorMessage.return_value = "Connection refused"
-
-        with patch.object(client, "_make_request", return_value=MagicMock()):
-            with patch(
-                "openspp_qgis.api.client.QgsBlockingNetworkRequest",
-                return_value=mock_blocking,
-            ):
-                with pytest.raises(Exception, match="Connection refused"):
-                    client._blocking_request("/ogc/processes")
+        with patch.object(
+            client,
+            "_urllib_request",
+            side_effect=Exception("Network error: Connection refused"),
+        ):
+            with pytest.raises(Exception, match="Connection refused"):
+                client._blocking_request("/ogc/processes")
 
     def test_execute_process_uses_blocking_when_requested(self):
         """Test _execute_process uses _blocking_request with use_blocking."""

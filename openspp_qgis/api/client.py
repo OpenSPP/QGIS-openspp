@@ -22,7 +22,7 @@ import logging
 import time
 from urllib.parse import urljoin
 
-from qgis.core import Qgis, QgsBlockingNetworkRequest, QgsMessageLog, QgsNetworkAccessManager
+from qgis.core import Qgis, QgsMessageLog, QgsNetworkAccessManager
 from qgis.PyQt.QtCore import QByteArray, QEventLoop, QTimer, QUrl
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 
@@ -354,11 +354,11 @@ class OpenSppClient:
         extra_headers: dict | None = None,
         full_response: bool = False,
     ):
-        """Make a thread-safe HTTP request using QgsBlockingNetworkRequest.
+        """Make a thread-safe HTTP request via Python urllib.
 
         Same interface as _sync_request() but safe for use in background
-        threads (e.g., Processing algorithms). Uses QgsBlockingNetworkRequest
-        instead of QEventLoop, which has thread-affinity issues.
+        threads (e.g., Processing algorithms). Delegates to _urllib_request
+        which uses urllib.request instead of Qt networking.
 
         Args:
             endpoint: API endpoint path
@@ -376,37 +376,83 @@ class OpenSppClient:
         """
         effective_timeout = timeout or self.TIMEOUT_MS
         url = self._make_url(endpoint)
-        request = self._make_request(url, extra_headers=extra_headers)
-        request.setTransferTimeout(effective_timeout)
-
-        blocking = QgsBlockingNetworkRequest()
-
-        if method == "GET":
-            err = blocking.get(request)
-        elif method == "POST":
-            body = QByteArray(json.dumps(data or {}).encode())
-            err = blocking.post(request, body)
-        elif method == "DELETE":
-            err = blocking.deleteResource(request)
-        else:
-            raise ValueError(f"Unsupported HTTP method: {method}")
-
-        if err != QgsBlockingNetworkRequest.NoError:
-            raise Exception(f"Network error: {blocking.errorMessage()}")
-
-        reply = blocking.reply()
-        status_code = reply.attribute(
-            QNetworkRequest.HttpStatusCodeAttribute
+        return self._urllib_request(
+            url,
+            method=method,
+            data=data,
+            timeout_ms=effective_timeout,
+            extra_headers=extra_headers,
+            full_response=full_response,
         )
-        response_data = reply.content().data()
+
+    def _urllib_request(
+        self,
+        url: str,
+        method: str = "GET",
+        data: dict | None = None,
+        timeout_ms: int | None = None,
+        extra_headers: dict | None = None,
+        full_response: bool = False,
+    ):
+        """Make an HTTP request using Python urllib (thread-safe).
+
+        Used by _blocking_request and _get_job_status/_get_job_results
+        when running in background threads.
+
+        Args:
+            url: Full URL (not an endpoint path)
+            method: HTTP method
+            data: Request body (for POST)
+            timeout_ms: Timeout in milliseconds
+            extra_headers: Additional headers
+            full_response: Return (status_code, headers_dict, body) tuple
+
+        Returns:
+            Parsed JSON, or (status_code, headers, body) tuple
+
+        Raises:
+            Exception: On network or HTTP error
+        """
+        import urllib.error
+        import urllib.request
+
+        timeout_s = (timeout_ms or self.TIMEOUT_MS) / 1000.0
+        token = self._get_access_token()
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "OpenSPP-QGIS-Plugin/1.0",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+
+        body_bytes = None
+        if data is not None:
+            body_bytes = json.dumps(data).encode("utf-8")
+
+        req = urllib.request.Request(
+            url, data=body_bytes, headers=headers, method=method
+        )
+
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout_s)
+            status_code = resp.status
+            response_data = resp.read()
+            resp_headers = dict(resp.headers)
+        except urllib.error.HTTPError as e:
+            status_code = e.code
+            response_data = e.read()
+            resp_headers = dict(e.headers)
+        except urllib.error.URLError as e:
+            raise Exception(f"Network error: {e.reason}") from e
 
         if full_response:
-            headers = self._parse_headers(reply)
             try:
                 parsed_body = json.loads(response_data.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 parsed_body = None
-            return (status_code, headers, parsed_body)
+            return (status_code, resp_headers, parsed_body)
 
         try:
             return json.loads(response_data.decode("utf-8"))
@@ -528,7 +574,7 @@ class OpenSppClient:
                 is the job status string, progress is 0-100 int, and message
                 is a human-readable string. Return False from the callback to
                 request cancellation (dismiss the job).
-            use_blocking: Use QgsBlockingNetworkRequest instead of QEventLoop.
+            use_blocking: Use Python urllib instead of Qt networking.
                 Required when running in a background thread (e.g., Processing
                 algorithms). Default False (main thread, toolbar actions).
 
@@ -613,7 +659,7 @@ class OpenSppClient:
             on_progress: Optional callback for progress updates. Called as
                 on_progress(status, progress, message). Return False to
                 request cancellation.
-            use_blocking: Use QgsBlockingNetworkRequest for thread-safe polling.
+            use_blocking: Use Python urllib for thread-safe polling.
                 When True, uses time.sleep() instead of QEventLoop for waits.
 
         Returns:
@@ -706,30 +752,26 @@ class OpenSppClient:
 
         Args:
             status_url: Absolute URL to the job status endpoint
-            use_blocking: Use QgsBlockingNetworkRequest (thread-safe)
+            use_blocking: Use Python urllib (thread-safe)
 
         Returns:
             Tuple of (status_info_dict, retry_after_value) on success,
             or (None, None) on transient error (caller should retry).
         """
         if use_blocking:
-            blocking = QgsBlockingNetworkRequest()
-            request = self._make_request(status_url)
-            request.setTransferTimeout(self.TIMEOUT_MS)
-            err = blocking.get(request)
-            if err != QgsBlockingNetworkRequest.NoError:
+            try:
+                status_code, headers, body = self._urllib_request(
+                    status_url, full_response=True
+                )
+                retry_after_val = headers.get("Retry-After", "")
+                return body, retry_after_val
+            except Exception as e:
                 QgsMessageLog.logMessage(
-                    f"Job poll error: {blocking.errorMessage()}",
+                    f"Job poll error: {e}",
                     "OpenSPP",
                     Qgis.Warning,
                 )
                 return None, None
-            reply = blocking.reply()
-            response_data = reply.content().data()
-            status_info = json.loads(response_data.decode("utf-8"))
-            headers = self._parse_headers(reply)
-            retry_after_val = headers.get("Retry-After", "")
-            return status_info, retry_after_val
 
         # Main-thread path: QEventLoop
         request = self._make_request(status_url)
@@ -770,7 +812,7 @@ class OpenSppClient:
 
         Args:
             results_url: Absolute URL to the job results endpoint
-            use_blocking: Use QgsBlockingNetworkRequest (thread-safe)
+            use_blocking: Use Python urllib (thread-safe)
 
         Returns:
             Parsed JSON results
@@ -779,17 +821,7 @@ class OpenSppClient:
             Exception: On network error
         """
         if use_blocking:
-            blocking = QgsBlockingNetworkRequest()
-            request = self._make_request(results_url)
-            request.setTransferTimeout(self.TIMEOUT_MS)
-            err = blocking.get(request)
-            if err != QgsBlockingNetworkRequest.NoError:
-                raise Exception(
-                    f"Failed to fetch job results: {blocking.errorMessage()}"
-                )
-            reply = blocking.reply()
-            results_data = reply.content().data()
-            return json.loads(results_data.decode("utf-8"))
+            return self._urllib_request(results_url)
 
         # Main-thread path: QEventLoop
         results_request = self._make_request(results_url)
