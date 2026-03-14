@@ -45,6 +45,7 @@ class TestQueryProximity:
                     "relation": "beyond",
                 },
                 timeout=client.PROXIMITY_TIMEOUT_MS,
+                on_progress=None,
             )
             assert result == expected_response
 
@@ -112,3 +113,21 @@ class TestQueryProximity:
 
             call_kwargs = mock_exec.call_args[1]
             assert call_kwargs["timeout"] == 120000
+
+    def test_proximity_forwards_on_progress(self):
+        """Test that on_progress callback is forwarded to _execute_process."""
+        client = self._make_client()
+        reference_points = [{"longitude": 28.0, "latitude": -2.0}]
+
+        def progress_cb(status, progress, message):
+            return True
+
+        with patch.object(client, "_execute_process", return_value={}) as mock_exec:
+            client.query_proximity(
+                reference_points=reference_points,
+                radius_km=10.0,
+                on_progress=progress_cb,
+            )
+
+            call_kwargs = mock_exec.call_args[1]
+            assert call_kwargs["on_progress"] is progress_cb

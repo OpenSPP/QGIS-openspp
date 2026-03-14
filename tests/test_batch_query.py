@@ -157,6 +157,24 @@ class TestQueryStatisticsBatch:
             assert call_kwargs.get("prefer_async") is True
 
 
+    def test_batch_forwards_on_progress(self):
+        """Test that on_progress callback is forwarded to _execute_process."""
+        client = self._make_client()
+        geometries = [
+            {"id": f"zone_{i}", "geometry": {"type": "Polygon", "coordinates": []}}
+            for i in range(client.ASYNC_BATCH_THRESHOLD + 1)
+        ]
+
+        def progress_cb(status, progress, message):
+            return True
+
+        with patch.object(client, "_execute_process", return_value={}) as mock_exec:
+            client.query_statistics_batch(geometries, on_progress=progress_cb)
+
+            call_kwargs = mock_exec.call_args[1]
+            assert call_kwargs["on_progress"] is progress_cb
+
+
 class TestGetPublishedStatistics:
     """Test OpenSppClient.get_published_statistics."""
 

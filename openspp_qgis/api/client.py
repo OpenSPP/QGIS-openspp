@@ -772,6 +772,7 @@ class OpenSppClient:
         geometries: list,
         filters: dict | None = None,
         variables: list | None = None,
+        on_progress=None,
     ) -> dict:
         """Query registrant statistics for multiple polygons individually.
 
@@ -805,6 +806,7 @@ class OpenSppClient:
             "spatial-statistics",
             inputs,
             prefer_async=prefer_async,
+            on_progress=on_progress,
         )
 
     # === Proximity Query Endpoints (OGC API Processes) ===
@@ -818,6 +820,7 @@ class OpenSppClient:
         relation: str = "beyond",
         filters: dict | None = None,
         variables: list | None = None,
+        on_progress=None,
     ) -> dict:
         """Query registrant statistics by proximity to reference points.
 
@@ -847,6 +850,7 @@ class OpenSppClient:
             "proximity-statistics",
             inputs,
             timeout=self.PROXIMITY_TIMEOUT_MS,
+            on_progress=on_progress,
         )
 
     # === Statistics Discovery Endpoints ===

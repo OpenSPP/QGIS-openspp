@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 from qgis.core import Qgis, QgsApplication, QgsMessageLog, QgsProject, QgsVectorLayer
 from qgis.PyQt.QtCore import QCoreApplication, QSettings, Qt, QTimer, QTranslator
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QMenu, QToolButton
+from qgis.PyQt.QtWidgets import QAction, QMenu, QProgressBar, QPushButton, QToolButton
 
 from .api.client import OpenSppClient
 from .auth import update_oapif_auth_token
@@ -579,6 +579,59 @@ class OpenSppPlugin:
         """
         QgsMessageLog.logMessage(message, "OpenSPP", level)
 
+    # === Async Progress UI ===
+
+    def _create_progress_widget(self, text):
+        """Create a message bar widget with progress bar and cancel button.
+
+        Returns a tuple of (msg_bar, progress_bar, cancel_button, cancelled_flag)
+        where cancelled_flag is a mutable list: [False]. Set [0] = True on cancel.
+
+        Args:
+            text: Initial message text
+        """
+        msg_bar = self.iface.messageBar().createMessage(
+            self.tr("OpenSPP"), text
+        )
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        progress_bar.setValue(0)
+        progress_bar.setMaximumWidth(200)
+        msg_bar.layout().addWidget(progress_bar)
+
+        cancelled = [False]
+        cancel_btn = QPushButton(self.tr("Cancel"))
+
+        def on_cancel():
+            cancelled[0] = True
+            cancel_btn.setEnabled(False)
+            cancel_btn.setText(self.tr("Cancelling..."))
+
+        cancel_btn.clicked.connect(on_cancel)
+        msg_bar.layout().addWidget(cancel_btn)
+
+        self.iface.messageBar().pushWidget(msg_bar, Qgis.Info)
+
+        return msg_bar, progress_bar, cancel_btn, cancelled
+
+    def _make_progress_callback(self, progress_bar, cancelled):
+        """Create an on_progress callback wired to a progress bar widget.
+
+        Args:
+            progress_bar: QProgressBar to update
+            cancelled: Mutable list [bool], set [0]=True to cancel
+
+        Returns:
+            Callback function compatible with on_progress(status, progress, message)
+        """
+        def callback(status, progress, message):
+            progress_bar.setValue(int(progress))
+            if cancelled[0]:
+                return False
+            return True
+
+        return callback
+
     # === QML Auto-Styling Hook ===
 
     def _on_layer_added(self, layer):
@@ -779,18 +832,22 @@ class OpenSppPlugin:
                 )
                 return
 
-            # Show progress message
+            # Show progress widget with cancel button
             msg_text = self.tr(
                 f"Querying statistics for "
                 f"{len(geometries)} feature(s)..."
             )
-            msg_bar = self.iface.messageBar().createMessage(
-                self.tr("OpenSPP"), msg_text
+            msg_bar, progress_bar, cancel_btn, cancelled = (
+                self._create_progress_widget(msg_text)
             )
-            self.iface.messageBar().pushWidget(msg_bar, Qgis.Info)
+            on_progress = self._make_progress_callback(
+                progress_bar, cancelled
+            )
 
             # Use batch endpoint for per-shape results
-            result = self.client.query_statistics_batch(geometries)
+            result = self.client.query_statistics_batch(
+                geometries, on_progress=on_progress
+            )
 
             # Clear progress message
             self.iface.messageBar().popWidget(msg_bar)
@@ -882,21 +939,24 @@ class OpenSppPlugin:
                 )
                 return
 
-            # Show progress message
-            msg_bar = self.iface.messageBar().createMessage(
-                self.tr("OpenSPP"),
-                self.tr(
-                    f"Querying {dialog.relation} {dialog.radius_km} km "
-                    f"of {len(reference_points)} reference point(s)..."
-                ),
+            # Show progress widget with cancel button
+            msg_text = self.tr(
+                f"Querying {dialog.relation} {dialog.radius_km} km "
+                f"of {len(reference_points)} reference point(s)..."
             )
-            self.iface.messageBar().pushWidget(msg_bar, Qgis.Info)
+            msg_bar, progress_bar, cancel_btn, cancelled = (
+                self._create_progress_widget(msg_text)
+            )
+            on_progress = self._make_progress_callback(
+                progress_bar, cancelled
+            )
 
             # Call API
             result = self.client.query_proximity(
                 reference_points=reference_points,
                 radius_km=dialog.radius_km,
                 relation=dialog.relation,
+                on_progress=on_progress,
             )
 
             # Clear progress message
