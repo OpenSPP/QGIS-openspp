@@ -26,7 +26,6 @@ from qgis.core import (
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
-    QgsWkbTypes,
 )
 from qgis.PyQt.QtCore import QVariant
 
@@ -131,8 +130,9 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         if is_group:
             filters = {"is_group": True}
 
-        # Collect geometries from source
+        # Collect geometries from source (keep QgsGeometry for output)
         geometries = []
+        source_geometries = {}
         for feature in source.getFeatures():
             if feedback.isCanceled():
                 return {self.OUTPUT: None}
@@ -142,6 +142,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             geojson = json.loads(geom.asJson())
             fid = str(feature.id()) if feature.id() >= 0 else f"feature_{len(geometries)}"
             geometries.append({"id": fid, "geometry": geojson})
+            source_geometries[fid] = geom
 
         if feedback.isCanceled() or not geometries:
             return {self.OUTPUT: None}
@@ -195,13 +196,17 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             self.OUTPUT,
             context,
             fields,
-            QgsWkbTypes.Polygon,
+            source.wkbType(),
+            source.sourceCrs(),
         )
 
         for i, res in enumerate(results_list):
             if feedback.isCanceled():
                 break
             feat = QgsFeature()
+            res_id = str(res.get("id", i))
+            if res_id in source_geometries:
+                feat.setGeometry(source_geometries[res_id])
             attrs = [
                 float(res.get("id", i)),
                 float(res.get("total_count", 0)),
