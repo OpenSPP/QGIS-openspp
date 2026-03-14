@@ -20,12 +20,14 @@ from qgis.core import (
     QgsFeature,
     QgsField,
     QgsFields,
+    QgsGraduatedSymbolRenderer,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
+    QgsStyle,
 )
 from qgis.PyQt.QtCore import QVariant
 
@@ -46,6 +48,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         super().__init__()
         self._client = None
         self._variable_names = []
+        self._classify_field = "total_count"
 
     def name(self):
         return "spatial_statistics"
@@ -124,6 +127,8 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 for i in variable_indices
                 if i < len(self._variable_names)
             ]
+            if variables:
+                self._classify_field = variables[0]
 
         # Build filters
         filters = None
@@ -226,6 +231,32 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             feedback.setProgress(int((i + 1) / len(results_list) * 100))
 
         return {self.OUTPUT: dest_id}
+
+    def postProcessAlgorithm(self, context, feedback):
+        """Apply a graduated choropleth renderer to the output layer."""
+        layer = context.getMapLayer(self.OUTPUT)
+        if layer is None or not layer.isValid():
+            return {self.OUTPUT: layer}
+
+        classify_field = self._classify_field
+        if layer.fields().indexOf(classify_field) < 0:
+            return {self.OUTPUT: layer}
+
+        renderer = QgsGraduatedSymbolRenderer(classify_field)
+
+        # Use a built-in color ramp
+        style = QgsStyle.defaultStyle()
+        ramp = style.colorRamp("YlOrRd")
+        if ramp is None:
+            ramp = style.colorRamp("Spectral")
+        if ramp:
+            renderer.setSourceColorRamp(ramp)
+
+        renderer.updateClasses(layer, renderer.Jenks, 5)
+        layer.setRenderer(renderer)
+        layer.triggerRepaint()
+
+        return {self.OUTPUT: layer}
 
     def _get_variable_options(self):
         """Fetch variable names from the server for the enum dropdown."""
