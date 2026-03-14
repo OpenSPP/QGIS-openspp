@@ -26,6 +26,8 @@ from qgis.core import (
     QgsProcessingParameterNumber,
 )
 
+from .utils import fetch_variable_options
+
 logger = logging.getLogger(__name__)
 
 RELATION_OPTIONS = ["within", "beyond"]
@@ -166,21 +168,6 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
 
     def _get_variable_options(self):
         """Fetch variable names from the server for the enum dropdown."""
-        if self._variable_names:
-            return list(self._variable_names)
-
-        if not self._client:
-            return []
-
-        try:
-            stats = self._client.get_published_statistics()
-            names = []
-            for category in stats.get("categories", []):
-                for stat in category.get("statistics", []):
-                    name = stat.get("name", "")
-                    if name:
-                        names.append(name)
-            self._variable_names = names
-            return names
-        except Exception:
-            return []
+        names = fetch_variable_options(self._client, self._variable_names)
+        self._variable_names = names
+        return list(names)

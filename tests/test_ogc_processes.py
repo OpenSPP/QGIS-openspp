@@ -95,6 +95,7 @@ class TestExecuteProcess:
                     timeout_ms=client.ASYNC_TIMEOUT_MS,
                     initial_poll_interval_ms=client.JOB_POLL_INTERVAL_MS,
                     on_progress=None,
+                    use_blocking=False,
                 )
                 assert result == expected_result
 
@@ -380,10 +381,9 @@ class TestPollJob:
                             initial_poll_interval_ms=1000,
                         )
 
-        # First sleep uses initial_poll_interval_ms (1000)
-        assert sleep_calls[0] == 1000
-        # Second sleep should use Retry-After value (3 seconds = 3000ms)
-        assert sleep_calls[1] == 3000
+        # First poll is immediate (no sleep), so the first sleep uses
+        # the Retry-After value from the first response (3 seconds = 3000ms)
+        assert sleep_calls[0] == 3000
 
     def test_relative_job_url_gets_server_prefix(self):
         """Test that relative job URLs are resolved against the server URL."""
