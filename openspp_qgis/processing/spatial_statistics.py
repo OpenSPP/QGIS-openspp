@@ -259,6 +259,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
 
         renderer.updateClasses(layer, renderer.Jenks, 5)
         layer.setRenderer(renderer)
+        layer.setName(f"Spatial Statistics - {classify_field}")
         layer.triggerRepaint()
 
         return {self.OUTPUT: self._dest_id}
