@@ -25,6 +25,7 @@ category=Web
 icon=icons/openspp.svg
 experimental=True
 deprecated=False
+hasProcessingProvider=yes
 
 changelog=
     1.0.0 - Initial release

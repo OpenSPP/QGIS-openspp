@@ -22,6 +22,7 @@ from qgis.PyQt.QtWidgets import QAction, QMenu, QToolButton
 
 from .api.client import OpenSppClient
 from .auth import update_oapif_auth_token
+from .processing.provider import OpenSppProvider
 from .ui.connection_dialog import ConnectionDialog
 from .ui.geofence_dialog import GeofenceDialog
 from .ui.proximity_dialog import ProximityDialog
@@ -87,6 +88,9 @@ class OpenSppPlugin:
         self._token_refresh_timer = None
         # Retry interval when token refresh fails (60 seconds)
         self._TOKEN_REFRESH_RETRY_MS = 60000
+
+        # Processing provider
+        self.provider = None
 
         # UI components
         self.stats_panel = None
@@ -220,6 +224,10 @@ class OpenSppPlugin:
         # Load saved connection (may enable buttons)
         self._load_connection()
 
+        # Register Processing provider
+        self.provider = OpenSppProvider(client=self.client)
+        QgsApplication.processingRegistry().addProvider(self.provider)
+
         # Connect QML auto-styling hook
         QgsProject.instance().layerWasAdded.connect(self._on_layer_added)
 
@@ -316,6 +324,10 @@ class OpenSppPlugin:
         Called after connect, disconnect, load, and token refresh failure.
         Idempotent: safe to call multiple times with same state.
         """
+        # Keep Processing provider in sync with the client
+        if self.provider:
+            self.provider.set_client(self.client)
+
         if self.client:
             # Extract hostname from server URL for display
             hostname = urlparse(self.client.server_url).hostname
@@ -422,6 +434,11 @@ class OpenSppPlugin:
 
     def unload(self):
         """Remove plugin menu items and icons."""
+        # Remove Processing provider
+        if self.provider:
+            QgsApplication.processingRegistry().removeProvider(self.provider)
+            self.provider = None
+
         # Stop token refresh timer
         self._stop_token_refresh_timer()
 

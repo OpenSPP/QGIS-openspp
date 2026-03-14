@@ -75,6 +75,27 @@ def _create_mock_qgis_modules():
     core.QgsStyle = MagicMock()
     core.QgsStyle.defaultStyle = MagicMock(return_value=MagicMock())
 
+    # Processing framework
+    core.QgsProcessingProvider = _StubClass
+    core.QgsProcessingAlgorithm = _StubClass
+    core.QgsProcessingParameterFeatureSource = MagicMock
+    core.QgsProcessingParameterFeatureSink = MagicMock
+    core.QgsProcessingParameterEnum = MagicMock
+    core.QgsProcessingParameterNumber = MagicMock
+    core.QgsProcessingParameterNumber.Double = 1
+    core.QgsProcessingParameterBoolean = MagicMock
+    core.QgsProcessingParameterString = MagicMock
+    core.QgsProcessingOutputString = MagicMock
+    core.QgsProcessing = MagicMock()
+    core.QgsProcessing.TypeVectorPolygon = 3
+    core.QgsProcessing.TypeVectorPoint = 0
+    core.QgsProcessingFeedback = _StubClass
+    core.QgsProcessingContext = _StubClass
+    core.QgsFields = MagicMock
+    core.QgsWkbTypes.Point = 1
+    core.QgsWkbTypes.Polygon = 3
+    core.QgsCoordinateReferenceSystem.fromEpsgId = MagicMock(return_value=MagicMock())
+
     # qgis.PyQt.QtCore
     qtcore = ModuleType("qgis.PyQt.QtCore")
     qtcore.QSettings = MagicMock
