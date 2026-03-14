@@ -235,11 +235,20 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         if not self._dest_id:
             return {self.OUTPUT: self._dest_id}
 
+        # Set the layer name via load-on-completion details
+        classify_field = self._classify_field
+        layer_name = f"Spatial Statistics - {classify_field}"
+        if self._dest_id in context.layersToLoadOnCompletion():
+            details = context.layerToLoadOnCompletionDetails(self._dest_id)
+            details.name = layer_name
+
+        # Find the layer for renderer setup
         layer = context.getMapLayer(self._dest_id)
+        if layer is None:
+            layer = context.temporaryLayerStore().mapLayer(self._dest_id)
         if layer is None or not layer.isValid():
             return {self.OUTPUT: self._dest_id}
 
-        classify_field = self._classify_field
         if layer.fields().indexOf(classify_field) < 0:
             return {self.OUTPUT: self._dest_id}
 
@@ -255,7 +264,6 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
 
         renderer.updateClasses(layer, renderer.Jenks, 5)
         layer.setRenderer(renderer)
-        layer.setName(f"Spatial Statistics - {classify_field}")
         layer.triggerRepaint()
 
         return {self.OUTPUT: self._dest_id}
