@@ -49,6 +49,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         self._client = None
         self._variable_names = []
         self._classify_field = "total_count"
+        self._dest_id = None
 
     def name(self):
         return "spatial_statistics"
@@ -230,17 +231,21 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
 
             feedback.setProgress(int((i + 1) / len(results_list) * 100))
 
+        self._dest_id = dest_id
         return {self.OUTPUT: dest_id}
 
     def postProcessAlgorithm(self, context, feedback):
         """Apply a graduated choropleth renderer to the output layer."""
-        layer = context.getMapLayer(self.OUTPUT)
+        if not self._dest_id:
+            return {self.OUTPUT: self._dest_id}
+
+        layer = context.getMapLayer(self._dest_id)
         if layer is None or not layer.isValid():
-            return {self.OUTPUT: layer}
+            return {self.OUTPUT: self._dest_id}
 
         classify_field = self._classify_field
         if layer.fields().indexOf(classify_field) < 0:
-            return {self.OUTPUT: layer}
+            return {self.OUTPUT: self._dest_id}
 
         renderer = QgsGraduatedSymbolRenderer(classify_field)
 
@@ -256,7 +261,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         layer.setRenderer(renderer)
         layer.triggerRepaint()
 
-        return {self.OUTPUT: layer}
+        return {self.OUTPUT: self._dest_id}
 
     def _get_variable_options(self):
         """Fetch variable names from the server for the enum dropdown."""
