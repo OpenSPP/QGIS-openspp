@@ -45,6 +45,11 @@ class OpenSppClient:
     TIMEOUT_MS = 30000  # 30 seconds
     # Refresh token 5 minutes before expiry
     TOKEN_REFRESH_MARGIN_SECONDS = 300
+    # OGC API Processes async polling
+    JOB_POLL_INTERVAL_MS = 2000  # Default poll interval (server may override via Retry-After)
+    ASYNC_TIMEOUT_MS = 300000  # 5 minutes max wait for async jobs
+    # Request async for batches larger than this threshold
+    ASYNC_BATCH_THRESHOLD = 5
 
     def __init__(self, server_url: str, client_id: str, client_secret: str):
         """Initialize client.
@@ -99,12 +104,18 @@ class OpenSppClient:
         """
         return urljoin(self.server_url, f"{self.API_PREFIX}{endpoint}")
 
-    def _make_request(self, url: str, method: str = "GET") -> QNetworkRequest:
+    def _make_request(
+        self,
+        url: str,
+        method: str = "GET",
+        extra_headers: dict | None = None,
+    ) -> QNetworkRequest:
         """Create network request with authentication headers.
 
         Args:
             url: Full URL for request
             method: HTTP method
+            extra_headers: Additional headers to set (e.g., {"Prefer": "respond-async"})
 
         Returns:
             Configured QNetworkRequest
@@ -114,6 +125,9 @@ class OpenSppClient:
         token = self._get_access_token()
         request.setRawHeader(b"Authorization", f"Bearer {token}".encode())
         request.setRawHeader(b"User-Agent", b"OpenSPP-QGIS-Plugin/1.0")
+        if extra_headers:
+            for key, value in extra_headers.items():
+                request.setRawHeader(key.encode(), value.encode())
         return request
 
     def get_token(self) -> str:
@@ -209,6 +223,8 @@ class OpenSppClient:
         data: dict | None = None,
         raw_response: bool = False,
         timeout: int | None = None,
+        extra_headers: dict | None = None,
+        full_response: bool = False,
     ):
         """Make synchronous HTTP request.
 
@@ -218,9 +234,13 @@ class OpenSppClient:
             data: Request body data (for POST)
             raw_response: Return raw bytes instead of parsed JSON
             timeout: Override timeout in milliseconds (defaults to TIMEOUT_MS)
+            extra_headers: Additional HTTP headers (e.g., {"Prefer": "respond-async"})
+            full_response: If True, return (status_code, headers_dict, body) tuple
+                instead of just the body. Used by _execute_process() to detect
+                async responses (201) and read Location/Retry-After headers.
 
         Returns:
-            Parsed JSON response or raw bytes
+            Parsed JSON response, raw bytes, or (status_code, headers, body) tuple
 
         Raises:
             Exception: On network or API error
@@ -228,7 +248,7 @@ class OpenSppClient:
         effective_timeout = timeout or self.TIMEOUT_MS
 
         url = self._make_url(endpoint)
-        request = self._make_request(url)
+        request = self._make_request(url, extra_headers=extra_headers)
 
         # Set transfer timeout (Qt 5.15+)
         request.setTransferTimeout(effective_timeout)
@@ -267,29 +287,47 @@ class OpenSppClient:
                 reply.abort()
                 raise Exception("Request timed out")
 
-            # Check for errors
+            status_code = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+
+            # For full_response mode, 201 is a valid response (async job created),
+            # so we only raise on network-level errors, not HTTP status codes.
             if reply.error() != QNetworkReply.NoError:
-                error_msg = reply.errorString()
-                status_code = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
-                QgsMessageLog.logMessage(
-                    f"API error: {status_code} - {error_msg}",
-                    "OpenSPP",
-                    Qgis.Warning,
-                )
-                # Provide user-friendly error message
-                if reply.error() == QNetworkReply.TimeoutError:
-                    raise Exception("Request timed out. Please check your connection.")
-                elif reply.error() == QNetworkReply.ConnectionRefusedError:
-                    raise Exception("Connection refused. Is the server running?")
-                elif reply.error() == QNetworkReply.HostNotFoundError:
-                    raise Exception("Server not found. Please check the URL.")
-                elif reply.error() == QNetworkReply.AuthenticationRequiredError:
-                    raise Exception("Authentication failed. Please check your credentials.")
-                else:
-                    raise Exception(f"Network error: {error_msg}")
+                # 201 Created comes through as NoError in Qt, but guard against
+                # edge cases where Qt treats non-2xx as errors
+                if not (full_response and status_code and 200 <= status_code < 300):
+                    error_msg = reply.errorString()
+                    QgsMessageLog.logMessage(
+                        f"API error: {status_code} - {error_msg}",
+                        "OpenSPP",
+                        Qgis.Warning,
+                    )
+                    if reply.error() == QNetworkReply.TimeoutError:
+                        raise Exception("Request timed out. Please check your connection.")
+                    elif reply.error() == QNetworkReply.ConnectionRefusedError:
+                        raise Exception("Connection refused. Is the server running?")
+                    elif reply.error() == QNetworkReply.HostNotFoundError:
+                        raise Exception("Server not found. Please check the URL.")
+                    elif reply.error() == QNetworkReply.AuthenticationRequiredError:
+                        raise Exception(
+                            "Authentication failed. Please check your credentials."
+                        )
+                    else:
+                        raise Exception(f"Network error: {error_msg}")
 
             # Parse response
             response_data = reply.readAll().data()
+
+            if full_response:
+                headers = {}
+                for header_name in reply.rawHeaderList():
+                    name_str = bytes(header_name).decode("utf-8", errors="replace")
+                    value_bytes = reply.rawHeader(header_name)
+                    headers[name_str] = bytes(value_bytes).decode("utf-8", errors="replace")
+                try:
+                    parsed_body = json.loads(response_data.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    parsed_body = None
+                return (status_code, headers, parsed_body)
 
             if raw_response:
                 return response_data
@@ -373,7 +411,258 @@ class OpenSppClient:
             )
             return None
 
-    # === Spatial Query Endpoints ===
+    # === OGC API Processes Execution ===
+
+    def _execute_process(
+        self,
+        process_id: str,
+        inputs: dict,
+        prefer_async: bool = False,
+        timeout: int | None = None,
+    ) -> dict:
+        """Execute an OGC API Process, handling both sync and async responses.
+
+        Sends POST /ogc/processes/{process_id}/execution with the given inputs.
+        If the server returns 200, the result is returned directly. If the server
+        returns 201 (async job created, either by request or forced by the server),
+        polls the job until completion and returns the results.
+
+        Args:
+            process_id: OGC process identifier (e.g., "spatial-statistics")
+            inputs: Process inputs dict (will be wrapped in {"inputs": ...})
+            prefer_async: Send Prefer: respond-async header
+            timeout: Total timeout in milliseconds (covers both sync execution
+                and async polling). Defaults to ASYNC_TIMEOUT_MS.
+
+        Returns:
+            Process result (parsed JSON body)
+
+        Raises:
+            Exception: On execution failure, job failure, or timeout
+        """
+        effective_timeout = timeout or self.ASYNC_TIMEOUT_MS
+
+        extra_headers = {}
+        if prefer_async:
+            extra_headers["Prefer"] = "respond-async"
+
+        endpoint = f"/ogc/processes/{process_id}/execution"
+        data = {"inputs": inputs}
+
+        status_code, headers, body = self._sync_request(
+            endpoint,
+            method="POST",
+            data=data,
+            extra_headers=extra_headers or None,
+            full_response=True,
+            timeout=effective_timeout,
+        )
+
+        if status_code == 200:
+            return body
+
+        if status_code == 201:
+            # Async job created; poll for results
+            location = headers.get("Location") or headers.get("location")
+            if not location:
+                raise Exception(
+                    "Server returned 201 (async job created) but no Location header"
+                )
+
+            # Parse initial Retry-After hint from the 201 response
+            retry_after = headers.get("Retry-After") or headers.get("retry-after")
+            initial_poll_interval = self._parse_retry_after(retry_after)
+
+            return self._poll_job(
+                location,
+                timeout_ms=effective_timeout,
+                initial_poll_interval_ms=initial_poll_interval,
+            )
+
+        # Error responses
+        message = ""
+        if body and isinstance(body, dict):
+            message = body.get("detail") or body.get("message") or body.get("title", "")
+        if status_code == 400:
+            raise Exception(f"Invalid request: {message}" if message else "Invalid request")
+        if status_code == 404:
+            raise Exception(f"Process not found: {process_id}")
+        raise Exception(
+            f"Process execution failed (HTTP {status_code}): {message}"
+            if message
+            else f"Process execution failed (HTTP {status_code})"
+        )
+
+    def _poll_job(
+        self,
+        job_url: str,
+        timeout_ms: int | None = None,
+        initial_poll_interval_ms: int | None = None,
+    ) -> dict:
+        """Poll an async OGC Process job until completion.
+
+        Args:
+            job_url: Full URL to the job status endpoint (from Location header).
+                Can be absolute or a path relative to the server.
+            timeout_ms: Maximum time to wait in milliseconds
+            initial_poll_interval_ms: Initial poll interval (may be overridden
+                by Retry-After headers on subsequent responses)
+
+        Returns:
+            Job results (parsed JSON from GET /jobs/{jobId}/results)
+
+        Raises:
+            Exception: On job failure, dismissal, or timeout
+        """
+        effective_timeout = timeout_ms or self.ASYNC_TIMEOUT_MS
+        poll_interval = initial_poll_interval_ms or self.JOB_POLL_INTERVAL_MS
+
+        # Normalize job_url: if it's a relative path, prepend the server URL
+        if job_url.startswith("/"):
+            job_url = f"{self.server_url}{job_url}"
+
+        # Derive the status endpoint (strip /results if present, ensure no trailing slash)
+        status_url = job_url.rstrip("/")
+        if status_url.endswith("/results"):
+            status_url = status_url.rsplit("/results", 1)[0]
+
+        results_url = f"{status_url}/results"
+
+        start_time = time.time()
+
+        while True:
+            elapsed_ms = (time.time() - start_time) * 1000
+            if elapsed_ms >= effective_timeout:
+                raise Exception(
+                    f"Async job timed out after {elapsed_ms / 1000:.0f}s"
+                )
+
+            # Wait before polling (skip on first iteration if interval is 0)
+            if poll_interval > 0:
+                self._sleep_ms(poll_interval)
+
+            # Fetch job status using a direct GET to the absolute URL
+            request = self._make_request(status_url)
+            request.setTransferTimeout(self.TIMEOUT_MS)
+
+            loop = QEventLoop()
+            reply = self.network_manager.get(request)
+
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(loop.quit)
+            timer.start(self.TIMEOUT_MS)
+
+            reply.finished.connect(timer.stop)
+            reply.finished.connect(loop.quit)
+            loop.exec_()
+
+            try:
+                if reply.error() != QNetworkReply.NoError:
+                    QgsMessageLog.logMessage(
+                        f"Job poll error: {reply.errorString()}",
+                        "OpenSPP",
+                        Qgis.Warning,
+                    )
+                    # Continue polling on transient errors
+                    poll_interval = self.JOB_POLL_INTERVAL_MS
+                    continue
+
+                response_data = reply.readAll().data()
+                status_info = json.loads(response_data.decode("utf-8"))
+
+                # Read Retry-After for next poll interval
+                retry_header = reply.rawHeader(b"Retry-After")
+                retry_after_val = bytes(retry_header).decode("utf-8", errors="replace")
+                if retry_after_val:
+                    poll_interval = self._parse_retry_after(retry_after_val)
+                else:
+                    poll_interval = self.JOB_POLL_INTERVAL_MS
+
+            finally:
+                reply.deleteLater()
+
+            status = status_info.get("status", "")
+            progress = status_info.get("progress", 0)
+            message = status_info.get("message", "")
+
+            QgsMessageLog.logMessage(
+                f"Job status: {status} ({progress}%)"
+                + (f" - {message}" if message else ""),
+                "OpenSPP",
+                Qgis.Info,
+            )
+
+            if status == "successful":
+                # Fetch results from the results endpoint
+                results_request = self._make_request(results_url)
+                results_request.setTransferTimeout(self.TIMEOUT_MS)
+
+                loop = QEventLoop()
+                reply = self.network_manager.get(results_request)
+
+                timer = QTimer()
+                timer.setSingleShot(True)
+                timer.timeout.connect(loop.quit)
+                timer.start(self.TIMEOUT_MS)
+
+                reply.finished.connect(timer.stop)
+                reply.finished.connect(loop.quit)
+                loop.exec_()
+
+                try:
+                    if reply.error() != QNetworkReply.NoError:
+                        raise Exception(
+                            f"Failed to fetch job results: {reply.errorString()}"
+                        )
+                    results_data = reply.readAll().data()
+                    return json.loads(results_data.decode("utf-8"))
+                finally:
+                    reply.deleteLater()
+
+            elif status == "failed":
+                raise Exception(
+                    f"Job failed: {message}" if message else "Job failed"
+                )
+
+            elif status == "dismissed":
+                raise Exception("Job was cancelled")
+
+            # For "accepted" and "running", continue polling
+
+    @staticmethod
+    def _parse_retry_after(value: str | None) -> int:
+        """Parse a Retry-After header value into milliseconds.
+
+        Args:
+            value: Header value (seconds as string, or None)
+
+        Returns:
+            Interval in milliseconds, or JOB_POLL_INTERVAL_MS default
+        """
+        if not value:
+            return OpenSppClient.JOB_POLL_INTERVAL_MS
+        try:
+            seconds = int(value)
+            return max(seconds * 1000, 500)
+        except (ValueError, TypeError):
+            return OpenSppClient.JOB_POLL_INTERVAL_MS
+
+    @staticmethod
+    def _sleep_ms(ms: int):
+        """Sleep for the given number of milliseconds using Qt event loop.
+
+        Uses QEventLoop + QTimer so the Qt event loop stays responsive
+        during the wait (important for QGIS plugin context).
+        """
+        loop = QEventLoop()
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(loop.quit)
+        timer.start(ms)
+        loop.exec_()
+
+    # === Spatial Query Endpoints (OGC API Processes) ===
 
     def query_statistics(
         self,
@@ -383,6 +672,8 @@ class OpenSppClient:
     ) -> dict:
         """Query registrant statistics within polygon.
 
+        Executes the spatial-statistics OGC Process with a single geometry.
+
         Args:
             geometry: GeoJSON geometry (Polygon or MultiPolygon)
             filters: Additional filters (is_group, disabled, etc.)
@@ -391,13 +682,13 @@ class OpenSppClient:
         Returns:
             Statistics result with total_count, areas_matched, statistics dict
         """
-        data = {"geometry": geometry}
+        inputs = {"geometry": geometry}
         if filters:
-            data["filters"] = filters
+            inputs["filters"] = filters
         if variables:
-            data["variables"] = variables
+            inputs["variables"] = variables
 
-        return self._sync_request("/query/statistics", method="POST", data=data)
+        return self._execute_process("spatial-statistics", inputs)
 
     def query_statistics_batch(
         self,
@@ -407,6 +698,10 @@ class OpenSppClient:
     ) -> dict:
         """Query registrant statistics for multiple polygons individually.
 
+        Executes the spatial-statistics OGC Process with multiple geometries.
+        Each geometry is sent as an {id, value} object so results can be
+        correlated back to inputs.
+
         Args:
             geometries: List of dicts with 'id' and 'geometry' keys
             filters: Additional filters (is_group, disabled, etc.)
@@ -415,15 +710,27 @@ class OpenSppClient:
         Returns:
             Batch result with 'results' (per-geometry) and 'summary' (aggregate)
         """
-        data = {"geometries": geometries}
+        # Transform from plugin format to OGC Processes format:
+        # [{"id": x, "geometry": g}] -> [{"id": x, "value": g}]
+        geometry_inputs = [
+            {"id": g["id"], "value": g["geometry"]} for g in geometries
+        ]
+
+        inputs = {"geometry": geometry_inputs}
         if filters:
-            data["filters"] = filters
+            inputs["filters"] = filters
         if variables:
-            data["variables"] = variables
+            inputs["variables"] = variables
 
-        return self._sync_request("/query/statistics/batch", method="POST", data=data)
+        prefer_async = len(geometries) > self.ASYNC_BATCH_THRESHOLD
 
-    # === Proximity Query Endpoints ===
+        return self._execute_process(
+            "spatial-statistics",
+            inputs,
+            prefer_async=prefer_async,
+        )
+
+    # === Proximity Query Endpoints (OGC API Processes) ===
 
     PROXIMITY_TIMEOUT_MS = 120000  # 2 minutes for large point sets
 
@@ -437,8 +744,7 @@ class OpenSppClient:
     ) -> dict:
         """Query registrant statistics by proximity to reference points.
 
-        Finds registrants within or beyond a given radius from a set of
-        reference points (e.g., health centers, schools).
+        Executes the proximity-statistics OGC Process.
 
         Args:
             reference_points: List of dicts with 'longitude' and 'latitude' keys
@@ -450,20 +756,19 @@ class OpenSppClient:
         Returns:
             Proximity result with total_count, statistics, and query metadata
         """
-        data = {
+        inputs = {
             "reference_points": reference_points,
             "radius_km": radius_km,
             "relation": relation,
         }
         if filters:
-            data["filters"] = filters
+            inputs["filters"] = filters
         if variables:
-            data["variables"] = variables
+            inputs["variables"] = variables
 
-        return self._sync_request(
-            "/query/proximity",
-            method="POST",
-            data=data,
+        return self._execute_process(
+            "proximity-statistics",
+            inputs,
             timeout=self.PROXIMITY_TIMEOUT_MS,
         )
 
