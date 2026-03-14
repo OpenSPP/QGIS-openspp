@@ -94,7 +94,7 @@ def _setup_spatial_alg(features, client, variable_names=None, var_indices=None, 
 
     # Assign methods that QgsProcessingAlgorithm would normally provide
     alg.parameterAsSource = MagicMock(return_value=mock_source)
-    alg.parameterAsEnum = MagicMock(return_value=var_indices or [])
+    alg.parameterAsEnum = MagicMock(return_value=var_indices if var_indices is not None else 0)
     alg.parameterAsBool = MagicMock(return_value=is_group)
     alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
 
@@ -204,7 +204,7 @@ class TestSpatialStatisticsAlgorithm:
         mock_client.query_statistics_batch.assert_not_called()
 
     def test_process_algorithm_with_variables(self):
-        """Test that selected variables are passed to the API."""
+        """Test that selected variable is passed to the API."""
         mock_client = MagicMock()
         mock_client.query_statistics.return_value = {
             "total_count": 42,
@@ -216,7 +216,7 @@ class TestSpatialStatisticsAlgorithm:
             [feature],
             mock_client,
             variable_names=["beneficiary_count", "total_households"],
-            var_indices=[0, 1],
+            var_indices=1,
         )
 
         feedback = MagicMock()
@@ -225,7 +225,7 @@ class TestSpatialStatisticsAlgorithm:
         alg.processAlgorithm({}, MagicMock(), feedback)
 
         call_kwargs = mock_client.query_statistics.call_args[1]
-        assert call_kwargs["variables"] == ["beneficiary_count", "total_households"]
+        assert call_kwargs["variables"] == ["total_households"]
 
     def test_process_algorithm_with_filter(self):
         """Test that is_group filter is passed to the API."""

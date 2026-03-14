@@ -8,7 +8,7 @@ endpoint; multiple features use the batch endpoint.
 Usage from the Python console:
     processing.run("openspp:spatial_statistics", {
         "GEOMETRY": "path/to/layer.shp",
-        "VARIABLES": [0, 1],
+        "VARIABLES": 0,
         "OUTPUT": "memory:",
     })
 """
@@ -92,9 +92,9 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.VARIABLES,
-                "Statistics variables",
+                "Statistics variable",
                 options=variable_options,
-                allowMultiple=True,
+                allowMultiple=False,
                 optional=True,
             )
         )
@@ -117,19 +117,15 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
 
     def processAlgorithm(self, parameters, context, feedback):
         source = self.parameterAsSource(parameters, self.GEOMETRY, context)
-        variable_indices = self.parameterAsEnum(parameters, self.VARIABLES, context)
+        variable_idx = self.parameterAsEnum(parameters, self.VARIABLES, context)
         is_group = self.parameterAsBool(parameters, self.FILTER_IS_GROUP, context)
 
-        # Resolve selected variable names
+        # Resolve selected variable name
         variables = None
-        if variable_indices and self._variable_names:
-            variables = [
-                self._variable_names[i]
-                for i in variable_indices
-                if i < len(self._variable_names)
-            ]
-            if variables:
-                self._classify_field = variables[0]
+        if self._variable_names and variable_idx < len(self._variable_names):
+            selected = self._variable_names[variable_idx]
+            variables = [selected]
+            self._classify_field = selected
 
         # Build filters
         filters = None
