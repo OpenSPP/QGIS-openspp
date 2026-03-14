@@ -47,6 +47,7 @@ class OpenSppClient:
     TOKEN_REFRESH_MARGIN_SECONDS = 300
     # OGC API Processes async polling
     JOB_POLL_INTERVAL_MS = 2000  # Default poll interval (server may override via Retry-After)
+    JOB_POLL_REQUEST_TIMEOUT_MS = 10000  # Per-request timeout for poll GETs (10s)
     ASYNC_TIMEOUT_MS = 300000  # 5 minutes max wait for async jobs
     # Request async for batches larger than this threshold
     ASYNC_BATCH_THRESHOLD = 5
@@ -761,7 +762,9 @@ class OpenSppClient:
         if use_blocking:
             try:
                 status_code, headers, body = self._urllib_request(
-                    status_url, full_response=True
+                    status_url,
+                    full_response=True,
+                    timeout_ms=self.JOB_POLL_REQUEST_TIMEOUT_MS,
                 )
                 retry_after_val = headers.get("Retry-After", "")
                 return body, retry_after_val

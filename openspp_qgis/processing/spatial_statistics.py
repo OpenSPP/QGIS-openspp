@@ -148,6 +148,12 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
 
         feedback.pushInfo(f"Querying statistics for {len(geometries)} feature(s)...")
 
+        def on_progress(status, progress, message):
+            feedback.pushInfo(f"Job {status} ({progress}%){': ' + message if message else ''}")
+            if feedback.isCanceled():
+                return False
+            return True
+
         # Call API: single geometry or batch
         # use_blocking=True because Processing runs in a background thread
         if len(geometries) == 1:
@@ -164,6 +170,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 filters=filters,
                 variables=variables,
                 use_blocking=True,
+                on_progress=on_progress,
             )
             results_list = batch_result.get("results", [])
 
