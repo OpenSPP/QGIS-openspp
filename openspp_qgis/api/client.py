@@ -419,6 +419,7 @@ class OpenSppClient:
         inputs: dict,
         prefer_async: bool = False,
         timeout: int | None = None,
+        on_progress=None,
     ) -> dict:
         """Execute an OGC API Process, handling both sync and async responses.
 
@@ -433,6 +434,11 @@ class OpenSppClient:
             prefer_async: Send Prefer: respond-async header
             timeout: Total timeout in milliseconds (covers both sync execution
                 and async polling). Defaults to ASYNC_TIMEOUT_MS.
+            on_progress: Optional callback for async progress updates.
+                Called as on_progress(status, progress, message) where status
+                is the job status string, progress is 0-100 int, and message
+                is a human-readable string. Return False from the callback to
+                request cancellation (dismiss the job).
 
         Returns:
             Process result (parsed JSON body)
@@ -477,6 +483,7 @@ class OpenSppClient:
                 location,
                 timeout_ms=effective_timeout,
                 initial_poll_interval_ms=initial_poll_interval,
+                on_progress=on_progress,
             )
 
         # Error responses
@@ -498,6 +505,7 @@ class OpenSppClient:
         job_url: str,
         timeout_ms: int | None = None,
         initial_poll_interval_ms: int | None = None,
+        on_progress=None,
     ) -> dict:
         """Poll an async OGC Process job until completion.
 
@@ -507,12 +515,15 @@ class OpenSppClient:
             timeout_ms: Maximum time to wait in milliseconds
             initial_poll_interval_ms: Initial poll interval (may be overridden
                 by Retry-After headers on subsequent responses)
+            on_progress: Optional callback for progress updates. Called as
+                on_progress(status, progress, message). Return False to
+                request cancellation.
 
         Returns:
             Job results (parsed JSON from GET /jobs/{jobId}/results)
 
         Raises:
-            Exception: On job failure, dismissal, or timeout
+            Exception: On job failure, dismissal, timeout, or cancellation
         """
         effective_timeout = timeout_ms or self.ASYNC_TIMEOUT_MS
         poll_interval = initial_poll_interval_ms or self.JOB_POLL_INTERVAL_MS
@@ -593,6 +604,14 @@ class OpenSppClient:
                 Qgis.Info,
             )
 
+            # Notify caller of progress; allow cancellation
+            if on_progress is not None:
+                should_continue = on_progress(status, progress, message)
+                if should_continue is False and status in ("accepted", "running"):
+                    # Attempt to dismiss the job
+                    self._dismiss_job(status_url)
+                    raise Exception("Job cancelled by user")
+
             if status == "successful":
                 # Fetch results from the results endpoint
                 results_request = self._make_request(results_url)
@@ -661,6 +680,64 @@ class OpenSppClient:
         timer.timeout.connect(loop.quit)
         timer.start(ms)
         loop.exec_()
+
+    def _dismiss_job(self, job_status_url: str):
+        """Attempt to dismiss (cancel) an async job via DELETE.
+
+        Best-effort: logs warnings but does not raise on failure.
+        The server returns 409 if the job is already running and
+        cannot be cancelled.
+
+        Args:
+            job_status_url: Absolute URL to the job status endpoint
+        """
+        try:
+            request = self._make_request(job_status_url)
+            request.setTransferTimeout(self.TIMEOUT_MS)
+
+            loop = QEventLoop()
+            reply = self.network_manager.deleteResource(request)
+
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(loop.quit)
+            timer.start(self.TIMEOUT_MS)
+
+            reply.finished.connect(timer.stop)
+            reply.finished.connect(loop.quit)
+            loop.exec_()
+
+            try:
+                status_code = reply.attribute(
+                    QNetworkRequest.HttpStatusCodeAttribute
+                )
+                if status_code == 409:
+                    QgsMessageLog.logMessage(
+                        "Job is running and cannot be cancelled",
+                        "OpenSPP",
+                        Qgis.Warning,
+                    )
+                elif reply.error() != QNetworkReply.NoError:
+                    QgsMessageLog.logMessage(
+                        f"Failed to dismiss job: {reply.errorString()}",
+                        "OpenSPP",
+                        Qgis.Warning,
+                    )
+                else:
+                    QgsMessageLog.logMessage(
+                        "Job dismissed successfully",
+                        "OpenSPP",
+                        Qgis.Info,
+                    )
+            finally:
+                reply.deleteLater()
+
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f"Error dismissing job: {e}",
+                "OpenSPP",
+                Qgis.Warning,
+            )
 
     # === Spatial Query Endpoints (OGC API Processes) ===
 
@@ -785,9 +862,79 @@ class OpenSppClient:
         Returns:
             Statistics list with 'categories' and 'total_count'
         """
-        if not hasattr(self, "_statistics_cache") or self._statistics_cache is None or force_refresh:
+        if (
+            not hasattr(self, "_statistics_cache")
+            or self._statistics_cache is None
+            or force_refresh
+        ):
             self._statistics_cache = self._sync_request("/statistics")
         return self._statistics_cache
+
+    # === OGC Process Discovery ===
+
+    def get_process_description(
+        self,
+        process_id: str,
+        force_refresh: bool = False,
+    ) -> dict:
+        """Get OGC Process description with input/output schemas.
+
+        Returns the full process description including the
+        x-openspp-statistics extension for variable metadata.
+        Results are cached per process ID for the session.
+
+        Args:
+            process_id: Process identifier (e.g., "spatial-statistics")
+            force_refresh: Bypass cache and fetch fresh data
+
+        Returns:
+            Process description dict with id, title, inputs, outputs, etc.
+        """
+        if not hasattr(self, "_process_cache"):
+            self._process_cache = {}
+
+        if process_id not in self._process_cache or force_refresh:
+            self._process_cache[process_id] = self._sync_request(
+                f"/ogc/processes/{process_id}"
+            )
+        return self._process_cache[process_id]
+
+    def get_statistics_from_process(
+        self,
+        force_refresh: bool = False,
+    ) -> dict | None:
+        """Extract statistics metadata from the spatial-statistics process description.
+
+        Reads the x-openspp-statistics extension from the process description's
+        variables input. This provides the same category/label/icon data as
+        GET /statistics but from the OGC standard endpoint.
+
+        Falls back to None if the process description is unavailable or
+        doesn't contain the extension.
+
+        Args:
+            force_refresh: Bypass cache and fetch fresh data
+
+        Returns:
+            Statistics metadata dict with 'categories', or None if unavailable
+        """
+        try:
+            desc = self.get_process_description(
+                "spatial-statistics",
+                force_refresh=force_refresh,
+            )
+            inputs = desc.get("inputs", {})
+            variables_input = inputs.get("variables", {})
+            extension = variables_input.get("x-openspp-statistics")
+            if extension:
+                return extension
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f"Failed to read process description: {e}",
+                "OpenSPP",
+                Qgis.Warning,
+            )
+        return None
 
     # === Geofence Endpoints ===
 
