@@ -86,6 +86,7 @@ def _create_mock_qgis_modules():
     core.QgsProcessingParameterNumber.Double = 1
     core.QgsProcessingParameterBoolean = MagicMock
     core.QgsProcessingParameterString = MagicMock
+    core.QgsProcessingException = type("QgsProcessingException", (Exception,), {})
     core.QgsProcessingOutputString = MagicMock
     core.QgsProcessing = MagicMock()
     core.QgsProcessing.TypeVectorPolygon = 3

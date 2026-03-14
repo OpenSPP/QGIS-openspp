@@ -20,6 +20,7 @@ import logging
 from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
+    QgsProcessingException,
     QgsProcessingOutputString,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSource,
@@ -31,6 +32,7 @@ from .utils import fetch_variable_options
 logger = logging.getLogger(__name__)
 
 RELATION_OPTIONS = ["within", "beyond"]
+MAX_REFERENCE_POINTS = 10000
 
 
 class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
@@ -107,9 +109,9 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.VARIABLES,
-                "Statistics variables",
+                "Statistics variable",
                 options=variable_options,
-                allowMultiple=True,
+                allowMultiple=False,
                 optional=True,
             )
         )
@@ -132,6 +134,12 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         else:
             relation = "beyond"
 
+        # Resolve selected variable name
+        variable_idx = self.parameterAsEnum(parameters, self.VARIABLES, context)
+        variables = None
+        if self._variable_names and variable_idx < len(self._variable_names):
+            variables = [self._variable_names[variable_idx]]
+
         # Collect reference points from source
         reference_points = []
         for feature in source.getFeatures():
@@ -149,6 +157,13 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         if feedback.isCanceled() or not reference_points:
             return {self.OUTPUT: "{}"}
 
+        if len(reference_points) > MAX_REFERENCE_POINTS:
+            raise QgsProcessingException(
+                f"Too many reference points ({len(reference_points)}). "
+                f"The server allows a maximum of {MAX_REFERENCE_POINTS}. "
+                f"Please reduce the number of input features."
+            )
+
         feedback.pushInfo(
             f"Querying {relation} {radius_km} km of "
             f"{len(reference_points)} reference point(s)..."
@@ -165,6 +180,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
             reference_points=reference_points,
             radius_km=radius_km,
             relation=relation,
+            variables=variables,
             use_blocking=True,
             on_progress=on_progress,
         )
