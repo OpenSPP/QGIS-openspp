@@ -87,7 +87,7 @@ def _setup_spatial_alg(features, client, variable_names=None, var_indices=None, 
         alg._variable_names = variable_names
 
     mock_source = MagicMock()
-    mock_source.__iter__ = MagicMock(return_value=iter(features))
+    mock_source.getFeatures.return_value = iter(features)
     mock_source.featureCount.return_value = len(features)
 
     mock_sink = MagicMock()
@@ -107,7 +107,7 @@ def _setup_proximity_alg(features, client, radius_km=10.0, relation_idx=1):
     alg._client = client
 
     mock_source = MagicMock()
-    mock_source.__iter__ = MagicMock(return_value=iter(features))
+    mock_source.getFeatures.return_value = iter(features)
 
     alg.parameterAsSource = MagicMock(return_value=mock_source)
     alg.parameterAsDouble = MagicMock(return_value=radius_km)

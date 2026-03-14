@@ -133,7 +133,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
 
         # Collect geometries from source
         geometries = []
-        for feature in source:
+        for feature in source.getFeatures():
             if feedback.isCanceled():
                 return {self.OUTPUT: None}
             geom = feature.geometry()

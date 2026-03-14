@@ -134,7 +134,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
 
         # Collect reference points from source
         reference_points = []
-        for feature in source:
+        for feature in source.getFeatures():
             if feedback.isCanceled():
                 return {self.OUTPUT: "{}"}
             geom = feature.geometry()
