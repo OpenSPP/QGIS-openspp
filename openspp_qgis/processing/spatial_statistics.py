@@ -183,13 +183,19 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         fields.append(QgsField("id", QVariant.Double))
         fields.append(QgsField("total_count", QVariant.Double))
 
-        # Determine stat keys from the first result
+        # Collect stat keys from all results (first non-empty wins).
+        # Skip nested dicts like _grouped; only include flat numeric values.
         stat_keys = []
-        if results_list:
-            stats = results_list[0].get("statistics", {})
-            stat_keys = sorted(stats.keys())
-            for key in stat_keys:
-                fields.append(QgsField(key, QVariant.Double))
+        for res in results_list:
+            stats = res.get("statistics", {})
+            if stats:
+                stat_keys = sorted(
+                    k for k, v in stats.items()
+                    if not isinstance(v, dict)
+                )
+                break
+        for key in stat_keys:
+            fields.append(QgsField(key, QVariant.Double))
 
         sink, dest_id = self.parameterAsSink(
             parameters,
