@@ -2,8 +2,7 @@
 """Proximity Statistics Processing algorithm.
 
 Wraps OpenSppClient.query_proximity as a QGIS Processing algorithm.
-Returns aggregate statistics as a JSON string output (proximity queries
-return server-wide aggregates, not per-feature results).
+Returns aggregate statistics as a single-row table layer.
 
 Usage from the Python console:
     processing.run("openspp:proximity_statistics", {
@@ -14,18 +13,22 @@ Usage from the Python console:
     })
 """
 
-import json
 import logging
 
 from qgis.core import (
+    QgsFeature,
+    QgsField,
+    QgsFields,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingException,
-    QgsProcessingOutputString,
     QgsProcessingParameterEnum,
+    QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterNumber,
+    QgsWkbTypes,
 )
+from qgis.PyQt.QtCore import QVariant
 
 from .utils import fetch_variable_options
 
@@ -48,6 +51,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         super().__init__()
         self._client = None
         self._variable_names = []
+        self._dest_id = None
 
     def name(self):
         return "proximity_statistics"
@@ -66,7 +70,8 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
             "Query registrant statistics by proximity to reference "
             "points using the OpenSPP proximity-statistics OGC Process.\n\n"
             "Returns aggregate statistics for registrants within or "
-            "beyond a given radius of the input point features."
+            "beyond a given radius of the input point features.\n\n"
+            "The result is a single-row table with the aggregate counts."
         )
 
     def createInstance(self):
@@ -116,10 +121,10 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
             )
         )
 
-        self.addOutput(
-            QgsProcessingOutputString(
+        self.addParameter(
+            QgsProcessingParameterFeatureSink(
                 self.OUTPUT,
-                "Result JSON",
+                "Statistics output",
             )
         )
 
@@ -144,7 +149,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         reference_points = []
         for feature in source.getFeatures():
             if feedback.isCanceled():
-                return {self.OUTPUT: "{}"}
+                return {self.OUTPUT: None}
             geom = feature.geometry()
             if geom.isEmpty():
                 continue
@@ -155,7 +160,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
             })
 
         if feedback.isCanceled() or not reference_points:
-            return {self.OUTPUT: "{}"}
+            return {self.OUTPUT: None}
 
         if len(reference_points) > MAX_REFERENCE_POINTS:
             raise QgsProcessingException(
@@ -189,7 +194,54 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
             f"Result: {result.get('total_count', 0)} registrants found"
         )
 
-        return {self.OUTPUT: json.dumps(result)}
+        # Build output fields from the result
+        fields = QgsFields()
+        fields.append(QgsField("total_count", QVariant.Double))
+        fields.append(QgsField("radius_km", QVariant.Double))
+        fields.append(QgsField("relation", QVariant.String))
+        fields.append(QgsField("reference_points_count", QVariant.Double))
+
+        # Add statistic fields (skip nested dicts like _grouped)
+        stats = result.get("statistics", {})
+        stat_keys = sorted(
+            k for k, v in stats.items()
+            if not isinstance(v, dict)
+        )
+        for key in stat_keys:
+            fields.append(QgsField(key, QVariant.Double))
+
+        sink, dest_id = self.parameterAsSink(
+            parameters,
+            self.OUTPUT,
+            context,
+            fields,
+            QgsWkbTypes.NoGeometry,
+            source.sourceCrs(),
+        )
+
+        # Write a single summary row
+        feat = QgsFeature()
+        attrs = [
+            float(result.get("total_count", 0)),
+            float(radius_km),
+            relation,
+            float(result.get("reference_points_count", len(reference_points))),
+        ]
+        for key in stat_keys:
+            val = stats.get(key, 0)
+            attrs.append(float(val) if val is not None else 0.0)
+        feat.setAttributes(attrs)
+        sink.addFeature(feat)
+
+        self._dest_id = dest_id
+        return {self.OUTPUT: dest_id}
+
+    def postProcessAlgorithm(self, context, feedback):
+        """Set a meaningful name on the output table."""
+        if self._dest_id and self._dest_id in context.layersToLoadOnCompletion():
+            details = context.layerToLoadOnCompletionDetails(self._dest_id)
+            details.name = "OpenSPP - Proximity Results"
+        return {self.OUTPUT: self._dest_id}
 
     def _get_variable_options(self):
         """Fetch variable names from the server for the enum dropdown."""

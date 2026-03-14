@@ -1,6 +1,5 @@
 """Tests for the OpenSPP QGIS Processing provider and algorithms."""
 
-import json
 from unittest.mock import MagicMock
 
 from openspp_qgis.processing.provider import OpenSppProvider
@@ -101,7 +100,7 @@ def _setup_spatial_alg(features, client, variable_names=None, var_indices=None, 
     return alg, mock_sink
 
 
-def _setup_proximity_alg(features, client, radius_km=10.0, relation_idx=1):
+def _setup_proximity_alg(features, client, radius_km=10.0, relation_idx=1, var_idx=0):
     """Create and configure a ProximityStatisticsAlgorithm for testing."""
     alg = ProximityStatisticsAlgorithm()
     alg._client = client
@@ -109,11 +108,15 @@ def _setup_proximity_alg(features, client, radius_km=10.0, relation_idx=1):
     mock_source = MagicMock()
     mock_source.getFeatures.return_value = iter(features)
 
+    mock_sink = MagicMock()
+
     alg.parameterAsSource = MagicMock(return_value=mock_source)
     alg.parameterAsDouble = MagicMock(return_value=radius_km)
-    alg.parameterAsEnum = MagicMock(return_value=relation_idx)
+    # parameterAsEnum is called twice: once for RELATION, once for VARIABLES
+    alg.parameterAsEnum = MagicMock(side_effect=[relation_idx, var_idx])
+    alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
 
-    return alg
+    return alg, mock_sink
 
 
 class TestSpatialStatisticsAlgorithm:
@@ -293,12 +296,9 @@ class TestProximityStatisticsAlgorithm:
     def test_init_algorithm_defines_parameters(self):
         alg = ProximityStatisticsAlgorithm()
         alg.addParameter = MagicMock()
-        alg.addOutput = MagicMock()
         alg.initAlgorithm({})
-        # REFERENCE_POINTS, RADIUS_KM, RELATION, VARIABLES
-        assert alg.addParameter.call_count == 4
-        # OUTPUT (string output)
-        assert alg.addOutput.call_count == 1
+        # REFERENCE_POINTS, RADIUS_KM, RELATION, VARIABLES, OUTPUT
+        assert alg.addParameter.call_count == 5
 
     def test_process_algorithm_calls_query_proximity(self):
         """Test that processAlgorithm delegates to query_proximity."""
@@ -310,14 +310,14 @@ class TestProximityStatisticsAlgorithm:
         }
 
         feature = _make_mock_point_feature(lon=28.0, lat=-2.0)
-        alg = _setup_proximity_alg([feature], mock_client, radius_km=10.0, relation_idx=1)
+        alg, sink = _setup_proximity_alg([feature], mock_client, radius_km=10.0, relation_idx=1)
 
         feedback = MagicMock()
         feedback.isCanceled.return_value = False
 
         result = alg.processAlgorithm({}, MagicMock(), feedback)
 
-        assert "OUTPUT" in result
+        assert result["OUTPUT"] == "output_id"
         mock_client.query_proximity.assert_called_once()
         call_kwargs = mock_client.query_proximity.call_args[1]
         assert call_kwargs["radius_km"] == 10.0
@@ -326,33 +326,31 @@ class TestProximityStatisticsAlgorithm:
         assert call_kwargs["reference_points"][0]["longitude"] == 28.0
         assert call_kwargs["reference_points"][0]["latitude"] == -2.0
 
-    def test_process_algorithm_returns_json_string(self):
-        """Test that the output is a JSON string."""
-        expected_result = {
+    def test_process_algorithm_writes_summary_row(self):
+        """Test that the output sink gets a single summary row."""
+        mock_client = MagicMock()
+        mock_client.query_proximity.return_value = {
             "total_count": 42,
             "statistics": {"beneficiary_count": 42},
         }
-        mock_client = MagicMock()
-        mock_client.query_proximity.return_value = expected_result
 
         feature = _make_mock_point_feature()
-        alg = _setup_proximity_alg([feature], mock_client)
+        alg, sink = _setup_proximity_alg([feature], mock_client)
 
         feedback = MagicMock()
         feedback.isCanceled.return_value = False
 
-        result = alg.processAlgorithm({}, MagicMock(), feedback)
+        alg.processAlgorithm({}, MagicMock(), feedback)
 
-        parsed = json.loads(result["OUTPUT"])
-        assert parsed["total_count"] == 42
+        sink.addFeature.assert_called_once()
 
     def test_proximity_relation_within(self):
         """Test that enum index 0 maps to 'within'."""
         mock_client = MagicMock()
-        mock_client.query_proximity.return_value = {"total_count": 0}
+        mock_client.query_proximity.return_value = {"total_count": 0, "statistics": {}}
 
         feature = _make_mock_point_feature()
-        alg = _setup_proximity_alg([feature], mock_client, relation_idx=0)
+        alg, sink = _setup_proximity_alg([feature], mock_client, relation_idx=0)
 
         feedback = MagicMock()
         feedback.isCanceled.return_value = False
@@ -365,10 +363,10 @@ class TestProximityStatisticsAlgorithm:
     def test_proximity_relation_beyond(self):
         """Test that enum index 1 maps to 'beyond'."""
         mock_client = MagicMock()
-        mock_client.query_proximity.return_value = {"total_count": 0}
+        mock_client.query_proximity.return_value = {"total_count": 0, "statistics": {}}
 
         feature = _make_mock_point_feature()
-        alg = _setup_proximity_alg([feature], mock_client, relation_idx=1)
+        alg, sink = _setup_proximity_alg([feature], mock_client, relation_idx=1)
 
         feedback = MagicMock()
         feedback.isCanceled.return_value = False
@@ -381,7 +379,7 @@ class TestProximityStatisticsAlgorithm:
     def test_process_algorithm_respects_cancellation(self):
         """Test that processAlgorithm checks feedback.isCanceled."""
         mock_client = MagicMock()
-        alg = _setup_proximity_alg([], mock_client)
+        alg, sink = _setup_proximity_alg([], mock_client)
 
         feedback = MagicMock()
         feedback.isCanceled.return_value = True
@@ -398,7 +396,7 @@ class TestProximityStatisticsAlgorithm:
 
         mock_client = MagicMock()
         features = [_make_mock_point_feature() for _ in range(MAX_REFERENCE_POINTS + 1)]
-        alg = _setup_proximity_alg(features, mock_client)
+        alg, sink = _setup_proximity_alg(features, mock_client)
 
         feedback = MagicMock()
         feedback.isCanceled.return_value = False
@@ -413,13 +411,13 @@ class TestProximityStatisticsAlgorithm:
     def test_process_algorithm_multiple_points(self):
         """Test with multiple reference points."""
         mock_client = MagicMock()
-        mock_client.query_proximity.return_value = {"total_count": 100}
+        mock_client.query_proximity.return_value = {"total_count": 100, "statistics": {}}
 
         features = [
             _make_mock_point_feature(lon=28.0, lat=-2.0),
             _make_mock_point_feature(lon=30.0, lat=-4.0),
         ]
-        alg = _setup_proximity_alg(features, mock_client)
+        alg, sink = _setup_proximity_alg(features, mock_client)
 
         feedback = MagicMock()
         feedback.isCanceled.return_value = False
