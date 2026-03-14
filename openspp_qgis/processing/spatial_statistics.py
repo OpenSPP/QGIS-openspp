@@ -28,6 +28,7 @@ from qgis.core import (
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsStyle,
+    QgsSymbol,
 )
 from qgis.PyQt.QtCore import QVariant
 
@@ -252,7 +253,10 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         if layer.fields().indexOf(classify_field) < 0:
             return {self.OUTPUT: self._dest_id}
 
-        renderer = QgsGraduatedSymbolRenderer(classify_field)
+        # Set up a graduated renderer with a default polygon symbol
+        symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+        renderer = QgsGraduatedSymbolRenderer(classify_field, [])
+        renderer.setSourceSymbol(symbol)
 
         # Use a built-in color ramp
         style = QgsStyle.defaultStyle()
@@ -263,6 +267,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             renderer.setSourceColorRamp(ramp)
 
         renderer.updateClasses(layer, renderer.Jenks, 5)
+        renderer.updateColorRamp(ramp)
         layer.setRenderer(renderer)
         layer.triggerRepaint()
 

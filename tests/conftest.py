@@ -74,6 +74,7 @@ def _create_mock_qgis_modules():
     core.QgsGraduatedSymbolRenderer.Jenks = 0
     core.QgsStyle = MagicMock()
     core.QgsStyle.defaultStyle = MagicMock(return_value=MagicMock())
+    core.QgsSymbol = MagicMock()
 
     # Processing framework
     core.QgsProcessingProvider = _StubClass
