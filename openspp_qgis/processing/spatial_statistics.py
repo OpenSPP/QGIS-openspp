@@ -237,7 +237,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
 
         # Set the layer name via load-on-completion details
         classify_field = self._classify_field
-        layer_name = f"Spatial Statistics - {classify_field}"
+        layer_name = f"OpenSPP - {classify_field}"
         if self._dest_id in context.layersToLoadOnCompletion():
             details = context.layerToLoadOnCompletionDetails(self._dest_id)
             details.name = layer_name
