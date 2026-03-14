@@ -914,6 +914,7 @@ class OpenSppClient:
         geometry: dict,
         filters: dict | None = None,
         variables: list | None = None,
+        use_blocking: bool = False,
     ) -> dict:
         """Query registrant statistics within polygon.
 
@@ -923,6 +924,7 @@ class OpenSppClient:
             geometry: GeoJSON geometry (Polygon or MultiPolygon)
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
+            use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
             Statistics result with total_count, areas_matched, statistics dict
@@ -933,7 +935,9 @@ class OpenSppClient:
         if variables:
             inputs["variables"] = variables
 
-        return self._execute_process(self.PROCESS_SPATIAL_STATISTICS, inputs)
+        return self._execute_process(
+            self.PROCESS_SPATIAL_STATISTICS, inputs, use_blocking=use_blocking
+        )
 
     def query_statistics_batch(
         self,
@@ -941,6 +945,7 @@ class OpenSppClient:
         filters: dict | None = None,
         variables: list | None = None,
         on_progress=None,
+        use_blocking: bool = False,
     ) -> dict:
         """Query registrant statistics for multiple polygons individually.
 
@@ -952,6 +957,7 @@ class OpenSppClient:
             geometries: List of dicts with 'id' and 'geometry' keys
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
+            use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
             Batch result with 'results' (per-geometry) and 'summary' (aggregate)
@@ -975,6 +981,7 @@ class OpenSppClient:
             inputs,
             prefer_async=prefer_async,
             on_progress=on_progress,
+            use_blocking=use_blocking,
         )
 
     # === Proximity Query Endpoints (OGC API Processes) ===
@@ -989,6 +996,7 @@ class OpenSppClient:
         filters: dict | None = None,
         variables: list | None = None,
         on_progress=None,
+        use_blocking: bool = False,
     ) -> dict:
         """Query registrant statistics by proximity to reference points.
 
@@ -1000,6 +1008,7 @@ class OpenSppClient:
             relation: 'within' or 'beyond' (default: 'beyond')
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
+            use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
             Proximity result with total_count, statistics, and query metadata
@@ -1019,6 +1028,7 @@ class OpenSppClient:
             inputs,
             timeout=self.PROXIMITY_TIMEOUT_MS,
             on_progress=on_progress,
+            use_blocking=use_blocking,
         )
 
     # === Statistics Discovery Endpoints ===

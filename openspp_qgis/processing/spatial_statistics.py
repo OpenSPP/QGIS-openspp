@@ -149,11 +149,13 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo(f"Querying statistics for {len(geometries)} feature(s)...")
 
         # Call API: single geometry or batch
+        # use_blocking=True because Processing runs in a background thread
         if len(geometries) == 1:
             result = self._client.query_statistics(
                 geometry=geometries[0]["geometry"],
                 filters=filters,
                 variables=variables,
+                use_blocking=True,
             )
             results_list = [{"id": geometries[0]["id"], **result}]
         else:
@@ -161,6 +163,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 geometries=geometries,
                 filters=filters,
                 variables=variables,
+                use_blocking=True,
             )
             results_list = batch_result.get("results", [])
 

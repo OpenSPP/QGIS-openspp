@@ -23,6 +23,7 @@ class TestQueryStatistics:
             mock_exec.assert_called_once_with(
                 "spatial-statistics",
                 {"geometry": geometry},
+                use_blocking=False,
             )
             assert result == expected
 
@@ -39,6 +40,7 @@ class TestQueryStatistics:
             mock_exec.assert_called_once_with(
                 "spatial-statistics",
                 {"geometry": geometry, "filters": filters, "variables": variables},
+                use_blocking=False,
             )
 
     def test_single_query_without_optional_params(self):

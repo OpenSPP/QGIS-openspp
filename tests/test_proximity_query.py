@@ -46,6 +46,7 @@ class TestQueryProximity:
                 },
                 timeout=client.PROXIMITY_TIMEOUT_MS,
                 on_progress=None,
+                use_blocking=False,
             )
             assert result == expected_response
 

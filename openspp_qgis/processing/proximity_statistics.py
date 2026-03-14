@@ -154,10 +154,12 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
             f"{len(reference_points)} reference point(s)..."
         )
 
+        # use_blocking=True because Processing runs in a background thread
         result = self._client.query_proximity(
             reference_points=reference_points,
             radius_km=radius_km,
             relation=relation,
+            use_blocking=True,
         )
 
         feedback.pushInfo(
