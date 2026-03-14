@@ -96,6 +96,10 @@ def _create_mock_qgis_modules():
     core.QgsWkbTypes.Polygon = 3
     core.QgsCoordinateReferenceSystem.fromEpsgId = MagicMock(return_value=MagicMock())
 
+    # Thread-safe networking
+    core.QgsBlockingNetworkRequest = MagicMock
+    core.QgsBlockingNetworkRequest.NoError = 0
+
     # qgis.PyQt.QtCore
     qtcore = ModuleType("qgis.PyQt.QtCore")
     qtcore.QSettings = MagicMock
@@ -155,6 +159,8 @@ def _create_mock_qgis_modules():
     qtnetwork.QNetworkReply = MagicMock()
     qtnetwork.QNetworkReply.NoError = 0
     qtnetwork.QNetworkRequest = MagicMock
+    qtnetwork.QNetworkRequest.HttpStatusCodeAttribute = 0
+    qtnetwork.QNetworkRequest.ContentTypeHeader = 1
 
     # Module hierarchy
     qgis = ModuleType("qgis")

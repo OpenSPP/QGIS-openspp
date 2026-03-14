@@ -22,7 +22,7 @@ import logging
 import time
 from urllib.parse import urljoin
 
-from qgis.core import Qgis, QgsMessageLog, QgsNetworkAccessManager
+from qgis.core import Qgis, QgsBlockingNetworkRequest, QgsMessageLog, QgsNetworkAccessManager
 from qgis.PyQt.QtCore import QByteArray, QEventLoop, QTimer, QUrl
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 
@@ -342,6 +342,84 @@ class OpenSppClient:
             if reply:
                 reply.deleteLater()
 
+    def _blocking_request(
+        self,
+        endpoint: str,
+        method: str = "GET",
+        data: dict | None = None,
+        timeout: int | None = None,
+        extra_headers: dict | None = None,
+        full_response: bool = False,
+    ):
+        """Make a thread-safe HTTP request using QgsBlockingNetworkRequest.
+
+        Same interface as _sync_request() but safe for use in background
+        threads (e.g., Processing algorithms). Uses QgsBlockingNetworkRequest
+        instead of QEventLoop, which has thread-affinity issues.
+
+        Args:
+            endpoint: API endpoint path
+            method: HTTP method (GET, POST, DELETE)
+            data: Request body data (for POST)
+            timeout: Override timeout in milliseconds
+            extra_headers: Additional HTTP headers
+            full_response: If True, return (status_code, headers, body) tuple
+
+        Returns:
+            Parsed JSON response, or (status_code, headers, body) tuple
+
+        Raises:
+            Exception: On network or API error
+        """
+        effective_timeout = timeout or self.TIMEOUT_MS
+        url = self._make_url(endpoint)
+        request = self._make_request(url, extra_headers=extra_headers)
+        request.setTransferTimeout(effective_timeout)
+
+        blocking = QgsBlockingNetworkRequest()
+
+        if method == "GET":
+            err = blocking.get(request)
+        elif method == "POST":
+            body = QByteArray(json.dumps(data or {}).encode())
+            err = blocking.post(request, body)
+        elif method == "DELETE":
+            err = blocking.deleteResource(request)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+
+        if err != QgsBlockingNetworkRequest.NoError:
+            raise Exception(f"Network error: {blocking.errorMessage()}")
+
+        reply = blocking.reply()
+        status_code = reply.attribute(
+            QNetworkRequest.HttpStatusCodeAttribute
+        )
+        response_data = reply.content().data()
+
+        if full_response:
+            headers = {}
+            for header_name in reply.rawHeaderList():
+                name_str = bytes(header_name).decode(
+                    "utf-8", errors="replace"
+                )
+                value_bytes = reply.rawHeader(header_name)
+                headers[name_str] = bytes(value_bytes).decode(
+                    "utf-8", errors="replace"
+                )
+            try:
+                parsed_body = json.loads(
+                    response_data.decode("utf-8")
+                )
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                parsed_body = None
+            return (status_code, headers, parsed_body)
+
+        try:
+            return json.loads(response_data.decode("utf-8"))
+        except json.JSONDecodeError as e:
+            raise Exception(f"Invalid JSON response: {e}") from e
+
     # === Connection Testing ===
 
     def test_connection(self) -> bool:
@@ -420,6 +498,7 @@ class OpenSppClient:
         prefer_async: bool = False,
         timeout: int | None = None,
         on_progress=None,
+        use_blocking: bool = False,
     ) -> dict:
         """Execute an OGC API Process, handling both sync and async responses.
 
@@ -439,6 +518,9 @@ class OpenSppClient:
                 is the job status string, progress is 0-100 int, and message
                 is a human-readable string. Return False from the callback to
                 request cancellation (dismiss the job).
+            use_blocking: Use QgsBlockingNetworkRequest instead of QEventLoop.
+                Required when running in a background thread (e.g., Processing
+                algorithms). Default False (main thread, toolbar actions).
 
         Returns:
             Process result (parsed JSON body)
@@ -455,7 +537,8 @@ class OpenSppClient:
         endpoint = f"/ogc/processes/{process_id}/execution"
         data = {"inputs": inputs}
 
-        status_code, headers, body = self._sync_request(
+        request_fn = self._blocking_request if use_blocking else self._sync_request
+        status_code, headers, body = request_fn(
             endpoint,
             method="POST",
             data=data,
