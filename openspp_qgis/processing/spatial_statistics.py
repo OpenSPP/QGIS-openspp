@@ -27,6 +27,7 @@ from qgis.core import (
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
+    QgsProcessingUtils,
     QgsStyle,
     QgsSymbol,
 )
@@ -227,6 +228,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             sink.addFeature(feat)
 
             feedback.setProgress(int((i + 1) / len(results_list) * 100))
+        del sink
 
         self._dest_id = dest_id
         return {self.OUTPUT: dest_id}
@@ -243,10 +245,14 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             details = context.layerToLoadOnCompletionDetails(self._dest_id)
             details.name = layer_name
 
-        # Find the layer for renderer setup
+        # Find the layer for renderer setup.
+        # For memory layers the id lives in the temporary store; for
+        # file-backed outputs (GeoPackage, etc.) we need to load from path.
         layer = context.getMapLayer(self._dest_id)
         if layer is None:
             layer = context.temporaryLayerStore().mapLayer(self._dest_id)
+        if layer is None:
+            layer = QgsProcessingUtils.mapLayerFromString(self._dest_id, context)
         if layer is None or not layer.isValid():
             return {self.OUTPUT: self._dest_id}
 
@@ -267,6 +273,18 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             renderer.setSourceColorRamp(ramp)
 
         renderer.updateClasses(layer, renderer.Jenks, 5)
+
+        # Jenks can produce duplicate zero ranges (e.g. two "0 - 0" classes)
+        # when many features have a value of 0.  Remove the extras and
+        # extend the first non-zero range down to 0.
+        ranges = renderer.ranges()
+        to_delete = []
+        for i in range(len(ranges) - 1, 0, -1):
+            if ranges[i].lowerValue() == 0 and ranges[i].upperValue() == 0:
+                to_delete.append(i)
+        for i in to_delete:
+            renderer.deleteClass(i)
+
         renderer.updateColorRamp(ramp)
         layer.setRenderer(renderer)
         layer.triggerRepaint()

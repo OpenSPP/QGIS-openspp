@@ -224,6 +224,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
             attrs.append(float(val) if val is not None else 0.0)
         feat.setAttributes(attrs)
         sink.addFeature(feat)
+        del sink
 
         self._dest_id = dest_id
         return {self.OUTPUT: dest_id}

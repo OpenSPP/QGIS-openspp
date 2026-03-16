@@ -93,6 +93,7 @@ def _create_mock_qgis_modules():
     core.QgsProcessing.TypeVectorPoint = 0
     core.QgsProcessingFeedback = _StubClass
     core.QgsProcessingContext = _StubClass
+    core.QgsProcessingUtils = MagicMock()
     core.QgsFields = MagicMock
     core.QgsWkbTypes.NoGeometry = 100
     core.QgsWkbTypes.Point = 1
