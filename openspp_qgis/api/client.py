@@ -461,6 +461,17 @@ class OpenSppClient:
             status_code = e.code
             response_data = e.read()
             resp_headers = dict(e.headers)
+            # Raise on client/server errors unless full_response is requested
+            if not full_response and status_code and status_code >= 400:
+                detail = ""
+                try:
+                    body_json = json.loads(response_data.decode("utf-8"))
+                    detail = body_json.get("detail") or body_json.get("message") or ""
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    detail = response_data.decode("utf-8", errors="replace")
+                if detail:
+                    raise Exception(f"Server error ({status_code}): {detail}") from e
+                raise Exception(f"HTTP error {status_code}") from e
         except urllib.error.URLError as e:
             raise Exception(f"Network error: {e.reason}") from e
 
