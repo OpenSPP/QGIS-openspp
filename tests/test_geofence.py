@@ -548,6 +548,35 @@ class TestShowGeofenceDialogIntegration:
 
         plugin.iface.messageBar().pushSuccess.assert_called_once()
 
+    def test_accepted_dialog_refreshes_geofence_layers(self):
+        """When dialog is accepted, geofence layers are refreshed."""
+        plugin = self._make_plugin()
+
+        mock_layer = MagicMock()
+        mock_geom = MagicMock()
+        mock_geom.isEmpty.return_value = False
+        mock_geom.wkbType.return_value = 3
+        mock_feature = MagicMock()
+        mock_feature.geometry.return_value = mock_geom
+        mock_layer.selectedFeatures.return_value = [mock_feature]
+        plugin.iface.activeLayer.return_value = mock_layer
+
+        mock_qgs_geom = MagicMock()
+        mock_qgs_geom.isEmpty.return_value = True
+
+        with patch("openspp_qgis.openspp_plugin.isinstance", return_value=True):
+            with patch("qgis.core.QgsGeometry", return_value=mock_qgs_geom):
+                with patch("openspp_qgis.openspp_plugin.GeofenceDialog") as mock_dialog_cls:
+                    mock_dialog = MagicMock()
+                    mock_dialog.exec_.return_value = 1  # accepted
+                    mock_dialog.geofence_name = "Test Fence"
+                    mock_dialog_cls.return_value = mock_dialog
+
+                    with patch.object(plugin, "_refresh_geofence_layers") as mock_refresh:
+                        plugin.show_geofence_dialog()
+
+        mock_refresh.assert_called_once()
+
     def test_rejected_dialog_no_success_message(self):
         """When dialog is cancelled, no success message is shown."""
         plugin = self._make_plugin()
@@ -574,3 +603,334 @@ class TestShowGeofenceDialogIntegration:
                     plugin.show_geofence_dialog()
 
         plugin.iface.messageBar().pushSuccess.assert_not_called()
+
+
+# === Phase 4: Edit / Delete Geofence ===
+
+
+class TestGetSelectedGeofence:
+    """Test _get_selected_geofence helper."""
+
+    def _make_plugin(self):
+        from openspp_qgis.openspp_plugin import OpenSppPlugin
+
+        plugin = object.__new__(OpenSppPlugin)
+        plugin.iface = MagicMock()
+        plugin.client = MagicMock()
+        plugin.tr = lambda s: s
+        return plugin
+
+    def _make_geofence_layer(self, features=None, source="oapif geofences"):
+        """Create a mock vector layer that looks like a geofences layer."""
+        layer = MagicMock(spec=["source", "selectedFeatures"])
+        layer.source.return_value = source
+        layer.selectedFeatures.return_value = features or []
+        return layer
+
+    def _make_feature(self, fields_dict):
+        """Create a mock feature with given field name/value pairs."""
+        feature = MagicMock()
+        field_objs = []
+        for name in fields_dict:
+            f = MagicMock()
+            f.name.return_value = name
+            field_objs.append(f)
+        feature.fields.return_value = field_objs
+        feature.__getitem__ = lambda self_f, key: fields_dict[key]
+        return feature
+
+    def test_no_active_layer(self):
+        """Returns None and warns when no active layer."""
+        plugin = self._make_plugin()
+        plugin.iface.activeLayer.return_value = None
+
+        result = plugin._get_selected_geofence()
+
+        assert result is None
+        plugin.iface.messageBar().pushWarning.assert_called_once()
+
+    def test_non_geofence_layer(self):
+        """Returns None when active layer is not a geofences layer."""
+        plugin = self._make_plugin()
+        layer = self._make_geofence_layer(source="oapif some_other_layer")
+        plugin.iface.activeLayer.return_value = layer
+
+        with patch("openspp_qgis.openspp_plugin.isinstance", return_value=True):
+            result = plugin._get_selected_geofence()
+
+        assert result is None
+        plugin.iface.messageBar().pushWarning.assert_called_once()
+
+    def test_no_selection(self):
+        """Returns None when no features are selected."""
+        plugin = self._make_plugin()
+        layer = self._make_geofence_layer(features=[])
+        plugin.iface.activeLayer.return_value = layer
+
+        with patch("openspp_qgis.openspp_plugin.isinstance", return_value=True):
+            result = plugin._get_selected_geofence()
+
+        assert result is None
+
+    def test_multiple_selection(self):
+        """Returns None when more than one feature is selected."""
+        plugin = self._make_plugin()
+        feat1 = self._make_feature({"uuid": "a", "name": "A"})
+        feat2 = self._make_feature({"uuid": "b", "name": "B"})
+        layer = self._make_geofence_layer(features=[feat1, feat2])
+        plugin.iface.activeLayer.return_value = layer
+
+        with patch("openspp_qgis.openspp_plugin.isinstance", return_value=True):
+            result = plugin._get_selected_geofence()
+
+        assert result is None
+
+    def test_extracts_uuid_field(self):
+        """Extracts feature_id from 'uuid' field."""
+        plugin = self._make_plugin()
+        feature = self._make_feature({"uuid": "abc-123", "name": "Test"})
+        layer = self._make_geofence_layer(features=[feature])
+        plugin.iface.activeLayer.return_value = layer
+
+        with patch("openspp_qgis.openspp_plugin.isinstance", return_value=True):
+            result = plugin._get_selected_geofence()
+
+        assert result is not None
+        feature_id, properties, geometry, ret_layer = result
+        assert feature_id == "abc-123"
+        assert properties["name"] == "Test"
+
+    def test_falls_back_to_id_field(self):
+        """Falls back to 'id' field when 'uuid' is not present."""
+        plugin = self._make_plugin()
+        feature = self._make_feature({"id": "def-456", "name": "Fallback"})
+        layer = self._make_geofence_layer(features=[feature])
+        plugin.iface.activeLayer.return_value = layer
+
+        with patch("openspp_qgis.openspp_plugin.isinstance", return_value=True):
+            result = plugin._get_selected_geofence()
+
+        assert result is not None
+        feature_id = result[0]
+        assert feature_id == "def-456"
+
+    def test_no_id_field_returns_none(self):
+        """Returns None when feature has no uuid or id field."""
+        plugin = self._make_plugin()
+        feature = self._make_feature({"name": "No ID"})
+        layer = self._make_geofence_layer(features=[feature])
+        plugin.iface.activeLayer.return_value = layer
+
+        with patch("openspp_qgis.openspp_plugin.isinstance", return_value=True):
+            result = plugin._get_selected_geofence()
+
+        assert result is None
+
+
+class TestEditGeofence:
+    """Test edit_geofence handler."""
+
+    def _make_plugin(self):
+        from openspp_qgis.openspp_plugin import OpenSppPlugin
+
+        plugin = object.__new__(OpenSppPlugin)
+        plugin.iface = MagicMock()
+        plugin.client = MagicMock()
+        plugin.tr = lambda s: s
+        return plugin
+
+    def test_no_client_shows_warning(self):
+        """Shows warning when not connected."""
+        plugin = self._make_plugin()
+        plugin.client = None
+
+        plugin.edit_geofence()
+
+        plugin.iface.messageBar().pushWarning.assert_called_once()
+
+    def test_no_selection_returns_early(self):
+        """Returns early when _get_selected_geofence returns None."""
+        plugin = self._make_plugin()
+
+        with patch.object(plugin, "_get_selected_geofence", return_value=None):
+            with patch("openspp_qgis.openspp_plugin.GeofenceDialog") as mock_cls:
+                plugin.edit_geofence()
+
+        mock_cls.assert_not_called()
+
+    def test_opens_dialog_in_edit_mode(self):
+        """Opens GeofenceDialog with feature_id and feature_data."""
+        plugin = self._make_plugin()
+        mock_geom = MagicMock()
+        mock_layer = MagicMock()
+        props = {"name": "Fence A", "description": "Desc", "geofence_type": "custom", "incident_id": ""}
+
+        with patch.object(
+            plugin, "_get_selected_geofence",
+            return_value=("uuid-1", props, mock_geom, mock_layer),
+        ):
+            with patch("openspp_qgis.openspp_plugin.GeofenceDialog") as mock_cls:
+                mock_dialog = MagicMock()
+                mock_dialog.exec_.return_value = 0  # cancelled
+                mock_cls.return_value = mock_dialog
+
+                plugin.edit_geofence()
+
+        mock_cls.assert_called_once()
+        kwargs = mock_cls.call_args[1]
+        assert kwargs["feature_id"] == "uuid-1"
+        assert kwargs["feature_data"]["name"] == "Fence A"
+
+    def test_accepted_dialog_shows_success_and_refreshes(self):
+        """Accepted edit shows success message and refreshes layers."""
+        plugin = self._make_plugin()
+        mock_geom = MagicMock()
+        mock_layer = MagicMock()
+        props = {"name": "Fence A", "description": "", "geofence_type": "custom", "incident_id": ""}
+
+        with patch.object(
+            plugin, "_get_selected_geofence",
+            return_value=("uuid-1", props, mock_geom, mock_layer),
+        ):
+            with patch("openspp_qgis.openspp_plugin.GeofenceDialog") as mock_cls:
+                mock_dialog = MagicMock()
+                mock_dialog.exec_.return_value = 1  # accepted
+                mock_dialog.geofence_name = "Fence A"
+                mock_cls.return_value = mock_dialog
+
+                with patch.object(plugin, "_refresh_geofence_layers") as mock_refresh:
+                    plugin.edit_geofence()
+
+        plugin.iface.messageBar().pushSuccess.assert_called_once()
+        mock_refresh.assert_called_once()
+
+
+class TestDeleteGeofence:
+    """Test delete_geofence handler."""
+
+    def _make_plugin(self):
+        from openspp_qgis.openspp_plugin import OpenSppPlugin
+
+        plugin = object.__new__(OpenSppPlugin)
+        plugin.iface = MagicMock()
+        plugin.client = MagicMock()
+        plugin.tr = lambda s: s
+        return plugin
+
+    def test_no_client_shows_warning(self):
+        """Shows warning when not connected."""
+        plugin = self._make_plugin()
+        plugin.client = None
+
+        plugin.delete_geofence()
+
+        plugin.iface.messageBar().pushWarning.assert_called_once()
+
+    def test_no_selection_returns_early(self):
+        """Returns early when _get_selected_geofence returns None."""
+        plugin = self._make_plugin()
+
+        with patch.object(plugin, "_get_selected_geofence", return_value=None):
+            plugin.delete_geofence()
+
+        plugin.client.delete_geofence.assert_not_called()
+
+    def test_user_cancels_confirmation(self):
+        """Does not delete when user says No to confirmation."""
+        plugin = self._make_plugin()
+        props = {"name": "Fence B"}
+
+        with patch.object(
+            plugin, "_get_selected_geofence",
+            return_value=("uuid-2", props, MagicMock(), MagicMock()),
+        ):
+            with patch("qgis.PyQt.QtWidgets.QMessageBox") as mock_msgbox:
+                mock_msgbox.Yes = 0x00004000
+                mock_msgbox.No = 0x00010000
+                mock_msgbox.question.return_value = mock_msgbox.No
+
+                plugin.delete_geofence()
+
+        plugin.client.delete_geofence.assert_not_called()
+
+    def test_confirmed_delete_calls_client(self):
+        """Confirmed delete calls client.delete_geofence and shows success."""
+        plugin = self._make_plugin()
+        props = {"name": "Fence B"}
+
+        with patch.object(
+            plugin, "_get_selected_geofence",
+            return_value=("uuid-2", props, MagicMock(), MagicMock()),
+        ):
+            with patch("qgis.PyQt.QtWidgets.QMessageBox") as mock_msgbox:
+                mock_msgbox.Yes = 0x00004000
+                mock_msgbox.No = 0x00010000
+                mock_msgbox.question.return_value = mock_msgbox.Yes
+
+                with patch.object(plugin, "_refresh_geofence_layers") as mock_refresh:
+                    plugin.delete_geofence()
+
+        plugin.client.delete_geofence.assert_called_once_with("uuid-2")
+        plugin.iface.messageBar().pushSuccess.assert_called_once()
+        mock_refresh.assert_called_once()
+
+    def test_delete_error_shows_critical(self):
+        """Server error during delete shows critical message."""
+        plugin = self._make_plugin()
+        plugin.log = MagicMock()
+        props = {"name": "Fence C"}
+        plugin.client.delete_geofence.side_effect = Exception("Server error (500): Internal")
+
+        with patch.object(
+            plugin, "_get_selected_geofence",
+            return_value=("uuid-3", props, MagicMock(), MagicMock()),
+        ):
+            with patch("qgis.PyQt.QtWidgets.QMessageBox") as mock_msgbox:
+                mock_msgbox.Yes = 0x00004000
+                mock_msgbox.No = 0x00010000
+                mock_msgbox.question.return_value = mock_msgbox.Yes
+
+                plugin.delete_geofence()
+
+        plugin.iface.messageBar().pushCritical.assert_called_once()
+
+
+class TestRefreshGeofenceLayers:
+    """Test _refresh_geofence_layers."""
+
+    def _make_plugin(self):
+        from openspp_qgis.openspp_plugin import OpenSppPlugin
+
+        plugin = object.__new__(OpenSppPlugin)
+        plugin.iface = MagicMock()
+        plugin.tr = lambda s: s
+        return plugin
+
+    def test_refreshes_oapif_geofence_layer(self):
+        """Refreshes layers whose source contains 'geofences' and 'oapif'."""
+        plugin = self._make_plugin()
+        plugin.log = MagicMock()
+
+        mock_layer = MagicMock()
+        mock_layer.source.return_value = "url=http://example.com/gis/ogc oapif geofences"
+
+        with patch("openspp_qgis.openspp_plugin.QgsProject") as mock_project:
+            mock_project.instance.return_value.mapLayers.return_value = {"l1": mock_layer}
+            plugin._refresh_geofence_layers()
+
+        mock_layer.dataProvider().reloadData.assert_called_once()
+        mock_layer.triggerRepaint.assert_called_once()
+
+    def test_skips_non_geofence_layers(self):
+        """Does not refresh layers that don't match geofences."""
+        plugin = self._make_plugin()
+        plugin.log = MagicMock()
+
+        mock_layer = MagicMock()
+        mock_layer.source.return_value = "url=http://example.com/gis/ogc oapif layer_admin"
+
+        with patch("openspp_qgis.openspp_plugin.QgsProject") as mock_project:
+            mock_project.instance.return_value.mapLayers.return_value = {"l1": mock_layer}
+            plugin._refresh_geofence_layers()
+
+        mock_layer.dataProvider().reloadData.assert_not_called()

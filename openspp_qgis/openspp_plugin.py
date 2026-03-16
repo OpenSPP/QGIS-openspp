@@ -79,6 +79,8 @@ class OpenSppPlugin:
         self.action_stats = None
         self.action_proximity = None
         self.action_geofence = None
+        self.action_edit_geofence = None
+        self.action_delete_geofence = None
         self.action_export = None
 
         # API client (initialized on connection)
@@ -199,6 +201,22 @@ class OpenSppPlugin:
             status_tip=self.tr("Save selected polygon as geofence"),
         )
 
+        # Edit geofence action
+        self.action_edit_geofence = self.add_action(
+            os.path.join(icon_dir, "geofence.svg"),
+            self.tr("Edit Geofence"),
+            self.edit_geofence,
+            status_tip=self.tr("Edit selected geofence attributes"),
+        )
+
+        # Delete geofence action
+        self.action_delete_geofence = self.add_action(
+            os.path.join(icon_dir, "geofence.svg"),
+            self.tr("Delete Geofence"),
+            self.delete_geofence,
+            status_tip=self.tr("Delete selected geofence"),
+        )
+
         # Export action
         self.action_export = self.add_action(
             os.path.join(icon_dir, "export.svg"),
@@ -313,6 +331,8 @@ class OpenSppPlugin:
             self.action_stats,
             self.action_proximity,
             self.action_geofence,
+            self.action_edit_geofence,
+            self.action_delete_geofence,
             self.action_export,
         ]:
             if action:
@@ -474,6 +494,8 @@ class OpenSppPlugin:
         self.action_stats = None
         self.action_proximity = None
         self.action_geofence = None
+        self.action_edit_geofence = None
+        self.action_delete_geofence = None
         self.action_export = None
 
         # Remove menu
@@ -1092,6 +1114,140 @@ class OpenSppPlugin:
                     layer.triggerRepaint()
         except Exception as e:
             self.log(f"Could not refresh geofence layers: {e}", Qgis.Warning)
+
+    def _get_selected_geofence(self):
+        """Get the selected geofence feature from an OAPIF geofences layer.
+
+        Returns:
+            Tuple of (feature_id, properties_dict, geometry, layer) or None
+            if no valid geofence is selected.
+        """
+        layer = self.iface.activeLayer()
+        if not layer or not isinstance(layer, QgsVectorLayer):
+            self.iface.messageBar().pushWarning(
+                self.tr("OpenSPP"),
+                self.tr("No active vector layer selected"),
+            )
+            return None
+
+        source = layer.source().lower()
+        if "geofences" not in source:
+            self.iface.messageBar().pushWarning(
+                self.tr("OpenSPP"),
+                self.tr("Active layer is not a geofences layer"),
+            )
+            return None
+
+        selected = layer.selectedFeatures()
+        if len(selected) != 1:
+            self.iface.messageBar().pushWarning(
+                self.tr("OpenSPP"),
+                self.tr("Please select exactly one geofence feature"),
+            )
+            return None
+
+        feature = selected[0]
+        field_names = [f.name() for f in feature.fields()]
+
+        # Extract UUID from the feature attributes
+        feature_id = None
+        if "uuid" in field_names:
+            feature_id = feature["uuid"]
+        elif "id" in field_names:
+            feature_id = str(feature["id"])
+
+        if not feature_id:
+            self.iface.messageBar().pushWarning(
+                self.tr("OpenSPP"),
+                self.tr("Could not determine geofence ID from selected feature"),
+            )
+            return None
+
+        properties = {}
+        for name in field_names:
+            properties[name] = feature[name]
+
+        return (feature_id, properties, feature.geometry(), layer)
+
+    def edit_geofence(self):
+        """Edit the attributes of the selected geofence."""
+        if not self.client:
+            self.iface.messageBar().pushWarning(
+                self.tr("OpenSPP"),
+                self.tr("Please connect to OpenSPP first"),
+            )
+            return
+
+        result = self._get_selected_geofence()
+        if not result:
+            return
+
+        feature_id, properties, geometry, layer = result
+
+        feature_data = {
+            "name": properties.get("name", ""),
+            "description": properties.get("description", ""),
+            "geofence_type": properties.get("geofence_type", "custom"),
+            "incident_code": properties.get("incident_id", ""),
+        }
+
+        dialog = GeofenceDialog(
+            self.iface.mainWindow(),
+            geometry=geometry,
+            client=self.client,
+            feature_id=feature_id,
+            feature_data=feature_data,
+        )
+
+        if dialog.exec_():
+            self.iface.messageBar().pushSuccess(
+                self.tr("OpenSPP"),
+                self.tr(f"Geofence '{dialog.geofence_name}' updated successfully"),
+            )
+            self._refresh_geofence_layers()
+
+    def delete_geofence(self):
+        """Delete the selected geofence after confirmation."""
+        if not self.client:
+            self.iface.messageBar().pushWarning(
+                self.tr("OpenSPP"),
+                self.tr("Please connect to OpenSPP first"),
+            )
+            return
+
+        result = self._get_selected_geofence()
+        if not result:
+            return
+
+        feature_id, properties, geometry, layer = result
+        name = properties.get("name", feature_id)
+
+        from qgis.PyQt.QtWidgets import QMessageBox
+
+        reply = QMessageBox.question(
+            self.iface.mainWindow(),
+            self.tr("Delete Geofence"),
+            self.tr(f"Are you sure you want to delete geofence '{name}'?"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            self.client.delete_geofence(feature_id)
+            self.iface.messageBar().pushSuccess(
+                self.tr("OpenSPP"),
+                self.tr(f"Geofence '{name}' deleted"),
+            )
+            self._refresh_geofence_layers()
+        except Exception as e:
+            self.log(f"Failed to delete geofence: {e}", Qgis.Critical)
+            self.iface.messageBar().pushCritical(
+                self.tr("OpenSPP"),
+                self.tr(f"Failed to delete geofence: {str(e)}"),
+            )
 
     def export_geopackage(self):
         """Export layers as GeoPackage for offline use."""

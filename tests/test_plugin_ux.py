@@ -67,6 +67,8 @@ class TestSetActionsEnabled:
         plugin.action_stats = MagicMock()
         plugin.action_proximity = MagicMock()
         plugin.action_geofence = MagicMock()
+        plugin.action_edit_geofence = MagicMock()
+        plugin.action_delete_geofence = MagicMock()
         plugin.action_export = MagicMock()
 
         plugin._set_actions_enabled(False)
@@ -74,6 +76,8 @@ class TestSetActionsEnabled:
         plugin.action_stats.setEnabled.assert_called_with(False)
         plugin.action_proximity.setEnabled.assert_called_with(False)
         plugin.action_geofence.setEnabled.assert_called_with(False)
+        plugin.action_edit_geofence.setEnabled.assert_called_with(False)
+        plugin.action_delete_geofence.setEnabled.assert_called_with(False)
         plugin.action_export.setEnabled.assert_called_with(False)
 
     def test_enables_action_buttons(self):
@@ -82,6 +86,8 @@ class TestSetActionsEnabled:
         plugin.action_stats = MagicMock()
         plugin.action_proximity = MagicMock()
         plugin.action_geofence = MagicMock()
+        plugin.action_edit_geofence = MagicMock()
+        plugin.action_delete_geofence = MagicMock()
         plugin.action_export = MagicMock()
 
         plugin._set_actions_enabled(True)
@@ -89,6 +95,8 @@ class TestSetActionsEnabled:
         plugin.action_stats.setEnabled.assert_called_with(True)
         plugin.action_proximity.setEnabled.assert_called_with(True)
         plugin.action_geofence.setEnabled.assert_called_with(True)
+        plugin.action_edit_geofence.setEnabled.assert_called_with(True)
+        plugin.action_delete_geofence.setEnabled.assert_called_with(True)
         plugin.action_export.setEnabled.assert_called_with(True)
 
     def test_skips_none_actions(self):
@@ -109,6 +117,8 @@ class TestUpdateConnectionState:
         plugin.action_stats = MagicMock()
         plugin.action_proximity = MagicMock()
         plugin.action_geofence = MagicMock()
+        plugin.action_edit_geofence = MagicMock()
+        plugin.action_delete_geofence = MagicMock()
         plugin.action_export = MagicMock()
         plugin.client = _make_client("https://openspp.example.org")
 
@@ -127,6 +137,8 @@ class TestUpdateConnectionState:
         plugin.action_stats = MagicMock()
         plugin.action_proximity = MagicMock()
         plugin.action_geofence = MagicMock()
+        plugin.action_edit_geofence = MagicMock()
+        plugin.action_delete_geofence = MagicMock()
         plugin.action_export = MagicMock()
         plugin.client = None
 
@@ -143,6 +155,8 @@ class TestUpdateConnectionState:
         plugin.action_stats = MagicMock()
         plugin.action_proximity = MagicMock()
         plugin.action_geofence = MagicMock()
+        plugin.action_edit_geofence = MagicMock()
+        plugin.action_delete_geofence = MagicMock()
         plugin.action_export = MagicMock()
         plugin.client = _make_client()
 
@@ -164,6 +178,8 @@ class TestDisconnect:
         plugin.action_stats = MagicMock()
         plugin.action_proximity = MagicMock()
         plugin.action_geofence = MagicMock()
+        plugin.action_edit_geofence = MagicMock()
+        plugin.action_delete_geofence = MagicMock()
         plugin.action_export = MagicMock()
         plugin.client = _make_client()
 
@@ -179,6 +195,8 @@ class TestDisconnect:
         plugin.action_stats = MagicMock()
         plugin.action_proximity = MagicMock()
         plugin.action_geofence = MagicMock()
+        plugin.action_edit_geofence = MagicMock()
+        plugin.action_delete_geofence = MagicMock()
         plugin.action_export = MagicMock()
         plugin.client = _make_client()
 
@@ -194,6 +212,8 @@ class TestDisconnect:
         plugin.action_stats = MagicMock()
         plugin.action_proximity = MagicMock()
         plugin.action_geofence = MagicMock()
+        plugin.action_edit_geofence = MagicMock()
+        plugin.action_delete_geofence = MagicMock()
         plugin.action_export = MagicMock()
         mock_timer = MagicMock()
         plugin._token_refresh_timer = mock_timer
@@ -212,6 +232,8 @@ class TestDisconnect:
         plugin.action_stats = MagicMock()
         plugin.action_proximity = MagicMock()
         plugin.action_geofence = MagicMock()
+        plugin.action_edit_geofence = MagicMock()
+        plugin.action_delete_geofence = MagicMock()
         plugin.action_export = MagicMock()
         plugin.client = _make_client()
 
