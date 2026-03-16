@@ -512,7 +512,7 @@ calls.
 
 - [x] Run full test suite
 - [x] Run linters (ruff, ruff-format)
-- [ ] Manual test against server with Phase D deployed (when available)
+- [x] Manual test against server with Phase D deployed (when available)
 
 ## Staff Engineer Review Findings (Addressed)
 
