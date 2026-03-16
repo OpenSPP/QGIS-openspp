@@ -1073,6 +1073,7 @@ class OpenSppPlugin:
                     self.tr("OpenSPP"),
                     self.tr(f"Geofence '{dialog.geofence_name}' saved successfully"),
                 )
+                self._refresh_geofence_layers()
 
         except Exception as e:
             self.log(f"Error preparing geofence: {e}", Qgis.Critical)
@@ -1080,6 +1081,17 @@ class OpenSppPlugin:
                 self.tr("OpenSPP"),
                 self.tr("Failed to prepare geofence. Please try again."),
             )
+
+    def _refresh_geofence_layers(self):
+        """Refresh any OAPIF geofence layers in the project after a save."""
+        try:
+            for layer in QgsProject.instance().mapLayers().values():
+                source = layer.source().lower()
+                if "geofences" in source and ("oapif" in source or "wfs" in source):
+                    layer.dataProvider().reloadData()
+                    layer.triggerRepaint()
+        except Exception as e:
+            self.log(f"Could not refresh geofence layers: {e}", Qgis.Warning)
 
     def export_geopackage(self):
         """Export layers as GeoPackage for offline use."""
