@@ -35,7 +35,6 @@ from .utils import fetch_variable_options
 logger = logging.getLogger(__name__)
 
 RELATION_OPTIONS = ["within", "beyond"]
-MAX_REFERENCE_POINTS = 10000
 
 
 class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
@@ -161,13 +160,6 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
 
         if feedback.isCanceled() or not reference_points:
             return {self.OUTPUT: None}
-
-        if len(reference_points) > MAX_REFERENCE_POINTS:
-            raise QgsProcessingException(
-                f"Too many reference points ({len(reference_points)}). "
-                f"The server allows a maximum of {MAX_REFERENCE_POINTS}. "
-                f"Please reduce the number of input features."
-            )
 
         feedback.pushInfo(
             f"Querying {relation} {radius_km} km of "

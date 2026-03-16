@@ -388,26 +388,6 @@ class TestProximityStatisticsAlgorithm:
 
         mock_client.query_proximity.assert_not_called()
 
-    def test_process_algorithm_rejects_too_many_points(self):
-        """Test that exceeding the max reference points raises an error."""
-        import pytest
-
-        from openspp_qgis.processing.proximity_statistics import MAX_REFERENCE_POINTS
-
-        mock_client = MagicMock()
-        features = [_make_mock_point_feature() for _ in range(MAX_REFERENCE_POINTS + 1)]
-        alg, sink = _setup_proximity_alg(features, mock_client)
-
-        feedback = MagicMock()
-        feedback.isCanceled.return_value = False
-
-        from qgis.core import QgsProcessingException
-
-        with pytest.raises(QgsProcessingException):
-            alg.processAlgorithm({}, MagicMock(), feedback)
-
-        mock_client.query_proximity.assert_not_called()
-
     def test_process_algorithm_multiple_points(self):
         """Test with multiple reference points."""
         mock_client = MagicMock()
