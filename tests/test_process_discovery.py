@@ -165,3 +165,96 @@ class TestGetStatisticsFromProcess:
             mock_desc.assert_called_once_with(
                 "spatial-statistics", force_refresh=True
             )
+
+
+class TestGetDimensionsFromProcess:
+    """Test OpenSppClient.get_dimensions_from_process."""
+
+    def _make_client(self):
+        return OpenSppClient("https://test.example.com", "cid", "csecret")
+
+    def test_extracts_dimensions_from_process_description(self):
+        """Test that x-openspp-dimensions extension is extracted from group_by input."""
+        client = self._make_client()
+        dimensions = [
+            {"name": "gender", "label": "Gender"},
+            {"name": "age_group", "label": "Age Group"},
+        ]
+        process_desc = {
+            "id": "spatial-statistics",
+            "inputs": {
+                "group_by": {
+                    "title": "Disaggregation Dimensions",
+                    "schema": {"type": "array"},
+                    "x-openspp-dimensions": dimensions,
+                }
+            },
+        }
+
+        with patch.object(
+            client, "get_process_description", return_value=process_desc
+        ):
+            result = client.get_dimensions_from_process()
+
+            assert result == dimensions
+            assert result[0]["name"] == "gender"
+            assert result[1]["label"] == "Age Group"
+
+    def test_returns_empty_list_when_extension_missing(self):
+        """Test that empty list is returned when x-openspp-dimensions is missing."""
+        client = self._make_client()
+        process_desc = {
+            "id": "spatial-statistics",
+            "inputs": {
+                "group_by": {
+                    "title": "Disaggregation Dimensions",
+                    "schema": {"type": "array"},
+                }
+            },
+        }
+
+        with patch.object(
+            client, "get_process_description", return_value=process_desc
+        ):
+            result = client.get_dimensions_from_process()
+            assert result == []
+
+    def test_returns_empty_list_when_no_group_by_input(self):
+        """Test that empty list is returned when group_by input is missing."""
+        client = self._make_client()
+        process_desc = {
+            "id": "spatial-statistics",
+            "inputs": {"geometry": {}, "variables": {}},
+        }
+
+        with patch.object(
+            client, "get_process_description", return_value=process_desc
+        ):
+            result = client.get_dimensions_from_process()
+            assert result == []
+
+    def test_returns_empty_list_on_network_error(self):
+        """Test that empty list is returned when process description fetch fails."""
+        client = self._make_client()
+
+        with patch.object(
+            client,
+            "get_process_description",
+            side_effect=Exception("Connection refused"),
+        ):
+            result = client.get_dimensions_from_process()
+            assert result == []
+
+    def test_passes_force_refresh(self):
+        """Test that force_refresh is forwarded to get_process_description."""
+        client = self._make_client()
+        process_desc = {"id": "spatial-statistics", "inputs": {}}
+
+        with patch.object(
+            client, "get_process_description", return_value=process_desc
+        ) as mock_desc:
+            client.get_dimensions_from_process(force_refresh=True)
+
+            mock_desc.assert_called_once_with(
+                "spatial-statistics", force_refresh=True
+            )

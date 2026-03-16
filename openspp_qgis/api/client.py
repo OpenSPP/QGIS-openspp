@@ -982,6 +982,7 @@ class OpenSppClient:
         geometry: dict,
         filters: dict | None = None,
         variables: list | None = None,
+        group_by: list | None = None,
         use_blocking: bool = False,
     ) -> dict:
         """Query registrant statistics within polygon.
@@ -992,6 +993,7 @@ class OpenSppClient:
             geometry: GeoJSON geometry (Polygon or MultiPolygon)
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
+            group_by: Disaggregation dimensions (e.g., ["gender", "age_group"])
             use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
@@ -1002,6 +1004,8 @@ class OpenSppClient:
             inputs["filters"] = filters
         if variables:
             inputs["variables"] = variables
+        if group_by:
+            inputs["group_by"] = group_by
 
         return self._execute_process(
             self.PROCESS_SPATIAL_STATISTICS, inputs, use_blocking=use_blocking
@@ -1012,6 +1016,7 @@ class OpenSppClient:
         geometries: list,
         filters: dict | None = None,
         variables: list | None = None,
+        group_by: list | None = None,
         on_progress=None,
         use_blocking: bool = False,
     ) -> dict:
@@ -1025,6 +1030,7 @@ class OpenSppClient:
             geometries: List of dicts with 'id' and 'geometry' keys
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
+            group_by: Disaggregation dimensions (e.g., ["gender", "age_group"])
             use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
@@ -1041,6 +1047,8 @@ class OpenSppClient:
             inputs["filters"] = filters
         if variables:
             inputs["variables"] = variables
+        if group_by:
+            inputs["group_by"] = group_by
 
         prefer_async = len(geometries) > self.ASYNC_BATCH_THRESHOLD
 
@@ -1063,6 +1071,7 @@ class OpenSppClient:
         relation: str = "beyond",
         filters: dict | None = None,
         variables: list | None = None,
+        group_by: list | None = None,
         on_progress=None,
         use_blocking: bool = False,
     ) -> dict:
@@ -1076,6 +1085,7 @@ class OpenSppClient:
             relation: 'within' or 'beyond' (default: 'beyond')
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
+            group_by: Disaggregation dimensions (e.g., ["gender", "age_group"])
             use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
@@ -1090,6 +1100,8 @@ class OpenSppClient:
             inputs["filters"] = filters
         if variables:
             inputs["variables"] = variables
+        if group_by:
+            inputs["group_by"] = group_by
 
         return self._execute_process(
             self.PROCESS_PROXIMITY_STATISTICS,
@@ -1178,6 +1190,38 @@ class OpenSppClient:
                 Qgis.Warning,
             )
         return None
+
+    def get_dimensions_from_process(
+        self,
+        force_refresh: bool = False,
+    ) -> list:
+        """Extract dimension metadata from the spatial-statistics process description.
+
+        Reads x-openspp-dimensions from the group_by input.
+
+        Args:
+            force_refresh: Bypass cache and fetch fresh data
+
+        Returns:
+            List of dimension dicts [{"name": ..., "label": ...}], or empty list
+        """
+        try:
+            desc = self.get_process_description(
+                self.PROCESS_SPATIAL_STATISTICS,
+                force_refresh=force_refresh,
+            )
+            inputs = desc.get("inputs", {})
+            group_by_input = inputs.get("group_by", {})
+            dimensions = group_by_input.get("x-openspp-dimensions")
+            if dimensions:
+                return dimensions
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f"Failed to read dimension metadata: {e}",
+                "OpenSPP",
+                Qgis.Warning,
+            )
+        return []
 
     # === Geofence Endpoints ===
 

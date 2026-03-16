@@ -87,6 +87,21 @@ class TestQueryProximity:
             assert "filters" not in inputs
             assert "variables" not in inputs
 
+    def test_proximity_passes_group_by(self):
+        """Test that group_by is included in proximity query inputs."""
+        client = self._make_client()
+        reference_points = [{"longitude": 28.0, "latitude": -2.0}]
+
+        with patch.object(client, "_execute_process", return_value={}) as mock_exec:
+            client.query_proximity(
+                reference_points=reference_points,
+                radius_km=10.0,
+                group_by=["gender"],
+            )
+
+            inputs = mock_exec.call_args[0][1]
+            assert inputs["group_by"] == ["gender"]
+
     def test_proximity_default_relation_is_beyond(self):
         """Test that default relation is 'beyond'."""
         client = self._make_client()

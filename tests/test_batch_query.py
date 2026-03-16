@@ -27,6 +27,39 @@ class TestQueryStatistics:
             )
             assert result == expected
 
+    def test_single_query_passes_group_by_in_inputs(self):
+        """Test that group_by is included in inputs when provided."""
+        client = self._make_client()
+        geometry = {"type": "Polygon", "coordinates": []}
+
+        with patch.object(client, "_execute_process", return_value={}) as mock_exec:
+            client.query_statistics(geometry, group_by=["gender", "age_group"])
+
+            inputs = mock_exec.call_args[0][1]
+            assert inputs["group_by"] == ["gender", "age_group"]
+
+    def test_single_query_omits_group_by_when_none(self):
+        """Test that group_by is omitted from inputs when None."""
+        client = self._make_client()
+        geometry = {"type": "Polygon", "coordinates": []}
+
+        with patch.object(client, "_execute_process", return_value={}) as mock_exec:
+            client.query_statistics(geometry)
+
+            inputs = mock_exec.call_args[0][1]
+            assert "group_by" not in inputs
+
+    def test_single_query_omits_group_by_when_empty(self):
+        """Test that group_by is omitted from inputs when empty list."""
+        client = self._make_client()
+        geometry = {"type": "Polygon", "coordinates": []}
+
+        with patch.object(client, "_execute_process", return_value={}) as mock_exec:
+            client.query_statistics(geometry, group_by=[])
+
+            inputs = mock_exec.call_args[0][1]
+            assert "group_by" not in inputs
+
     def test_single_query_with_filters_and_variables(self):
         """Test that filters and variables are passed as inputs."""
         client = self._make_client()
@@ -129,6 +162,19 @@ class TestQueryStatisticsBatch:
             inputs = mock_exec.call_args[0][1]
             assert "filters" not in inputs
             assert "variables" not in inputs
+
+    def test_batch_query_passes_group_by(self):
+        """Test that group_by is included in batch query inputs."""
+        client = self._make_client()
+        geometries = [
+            {"id": "zone_1", "geometry": {"type": "Polygon", "coordinates": []}},
+        ]
+
+        with patch.object(client, "_execute_process", return_value={}) as mock_exec:
+            client.query_statistics_batch(geometries, group_by=["gender"])
+
+            inputs = mock_exec.call_args[0][1]
+            assert inputs["group_by"] == ["gender"]
 
     def test_batch_small_does_not_request_async(self):
         """Test that small batches (<= ASYNC_BATCH_THRESHOLD) don't request async."""
