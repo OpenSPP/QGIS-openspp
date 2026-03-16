@@ -455,23 +455,23 @@ calls.
 - [x] Call from each `show_*()` method after `_populate_stats_tree()`
 - [x] Add `_format_breakdown_text()` for clipboard output
 - [x] Wire into `_copy_to_clipboard()` for all result types
-- [ ] Commit
+- [x] Commit
 
 ### Phase C: Processing algorithms
 
-- [ ] Write test: spatial_statistics algorithm includes GROUP_BY parameter
-- [ ] Write test: spatial_statistics uses `parameterAsEnums` (plural) for GROUP_BY
-- [ ] Write test: spatial_statistics output layer includes breakdown columns from union of all results
-- [ ] Write test: spatial_statistics output layer handles missing breakdown cells (defaults to 0.0)
-- [ ] Write test: proximity_statistics algorithm includes GROUP_BY parameter
-- [ ] Write test: proximity_statistics output includes breakdown fields
-- [ ] Add GROUP_BY enum parameter to `SpatialStatisticsAlgorithm` (`allowMultiple=True`)
-- [ ] Use `parameterAsEnums()` to retrieve multi-select indices in `processAlgorithm()`
-- [ ] Collect union of breakdown keys across all results for field discovery
-- [ ] Add breakdown columns to output layer fields and populate from results
-- [ ] Add GROUP_BY enum parameter to `ProximityStatisticsAlgorithm`
-- [ ] Pass group_by to client call and add breakdown fields to output
-- [ ] Commit
+- [x] Write test: spatial_statistics algorithm includes GROUP_BY parameter
+- [x] Write test: spatial_statistics uses `parameterAsEnums` (plural) for GROUP_BY
+- [x] Write test: spatial_statistics output layer includes breakdown columns from union of all results
+- [x] Write test: spatial_statistics output layer handles missing breakdown cells (defaults to 0.0)
+- [x] Write test: proximity_statistics algorithm includes GROUP_BY parameter
+- [x] Write test: proximity_statistics output includes breakdown fields
+- [x] Add GROUP_BY enum parameter to `SpatialStatisticsAlgorithm` (`allowMultiple=True`)
+- [x] Use `parameterAsEnums()` to retrieve multi-select indices in `processAlgorithm()`
+- [x] Collect union of breakdown keys across all results for field discovery
+- [x] Add breakdown columns to output layer fields and populate from results
+- [x] Add GROUP_BY enum parameter to `ProximityStatisticsAlgorithm`
+- [x] Pass group_by to client call and add breakdown fields to output
+- [x] Commit
 
 ### Phase D: Stats panel re-query with disaggregation
 

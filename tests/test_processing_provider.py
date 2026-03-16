@@ -95,6 +95,7 @@ def _setup_spatial_alg(features, client, variable_names=None, var_indices=None, 
     alg.parameterAsSource = MagicMock(return_value=mock_source)
     alg.parameterAsEnum = MagicMock(return_value=var_indices if var_indices is not None else 0)
     alg.parameterAsBool = MagicMock(return_value=is_group)
+    alg.parameterAsEnums = MagicMock(return_value=[])
     alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
 
     return alg, mock_sink
@@ -114,6 +115,7 @@ def _setup_proximity_alg(features, client, radius_km=10.0, relation_idx=1, var_i
     alg.parameterAsDouble = MagicMock(return_value=radius_km)
     # parameterAsEnum is called twice: once for RELATION, once for VARIABLES
     alg.parameterAsEnum = MagicMock(side_effect=[relation_idx, var_idx])
+    alg.parameterAsEnums = MagicMock(return_value=[])
     alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
 
     return alg, mock_sink
@@ -148,8 +150,8 @@ class TestSpatialStatisticsAlgorithm:
         alg = SpatialStatisticsAlgorithm()
         alg.addParameter = MagicMock()
         alg.initAlgorithm({})
-        # GEOMETRY, VARIABLES, FILTER_IS_GROUP, OUTPUT
-        assert alg.addParameter.call_count == 4
+        # GEOMETRY, VARIABLES, FILTER_IS_GROUP, GROUP_BY, OUTPUT
+        assert alg.addParameter.call_count == 5
 
     def test_process_algorithm_single_geometry(self):
         """Test processAlgorithm with a single polygon feature."""
@@ -267,6 +269,153 @@ class TestSpatialStatisticsAlgorithm:
 
         sink.addFeature.assert_called_once()
 
+    def test_init_algorithm_includes_group_by_parameter(self):
+        """Test that GROUP_BY parameter is defined in initAlgorithm."""
+        alg = SpatialStatisticsAlgorithm()
+        alg.addParameter = MagicMock()
+        alg.initAlgorithm({})
+        # GEOMETRY, VARIABLES, FILTER_IS_GROUP, GROUP_BY, OUTPUT
+        assert alg.addParameter.call_count == 5
+
+    def test_process_algorithm_uses_parameter_as_enums_for_group_by(self):
+        """Test that parameterAsEnums (plural) is used for GROUP_BY multi-select."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 42,
+            "statistics": {},
+        }
+
+        feature = _make_mock_feature(fid=1)
+        alg, sink = _setup_spatial_alg([feature], mock_client)
+        alg._dimension_names = ["gender", "age_group"]
+        alg.parameterAsEnums = MagicMock(return_value=[0, 1])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        alg.parameterAsEnums.assert_called_once()
+
+    def test_process_algorithm_passes_group_by_to_client(self):
+        """Test that selected dimensions are passed as group_by to client."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 42,
+            "statistics": {},
+        }
+
+        feature = _make_mock_feature(fid=1)
+        alg, sink = _setup_spatial_alg([feature], mock_client)
+        alg._dimension_names = ["gender", "age_group"]
+        alg.parameterAsEnums = MagicMock(return_value=[0, 1])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        call_kwargs = mock_client.query_statistics.call_args[1]
+        assert call_kwargs["group_by"] == ["gender", "age_group"]
+
+    def test_output_includes_breakdown_columns_union(self):
+        """Test that output layer includes breakdown columns from union of all results."""
+        mock_client = MagicMock()
+        mock_client.query_statistics_batch.return_value = {
+            "results": [
+                {
+                    "id": "0",
+                    "total_count": 10,
+                    "statistics": {},
+                    "breakdown": {
+                        "1|child": {
+                            "count": 5,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "1", "display": "Male"},
+                            },
+                        },
+                    },
+                },
+                {
+                    "id": "1",
+                    "total_count": 20,
+                    "statistics": {},
+                    "breakdown": {
+                        "1|child": {
+                            "count": 8,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "1", "display": "Male"},
+                            },
+                        },
+                        "2|child": {
+                            "count": 12,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "2", "display": "Female"},
+                            },
+                        },
+                    },
+                },
+            ],
+            "summary": {"total_count": 30},
+        }
+
+        features = [_make_mock_feature(fid=i) for i in range(2)]
+        alg, sink = _setup_spatial_alg(features, mock_client)
+        alg._dimension_names = ["gender"]
+        alg.parameterAsEnums = MagicMock(return_value=[0])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        # Sink should have been called with features that include breakdown attrs
+        assert sink.addFeature.call_count == 2
+
+    def test_output_handles_missing_breakdown_cells(self):
+        """Test that missing breakdown cells default to 0.0."""
+        mock_client = MagicMock()
+        mock_client.query_statistics_batch.return_value = {
+            "results": [
+                {
+                    "id": "0",
+                    "total_count": 10,
+                    "statistics": {},
+                    "breakdown": {
+                        "male": {
+                            "count": 10,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "1", "display": "Male"},
+                            },
+                        },
+                    },
+                },
+                {
+                    "id": "1",
+                    "total_count": 5,
+                    "statistics": {},
+                    "breakdown": {},
+                },
+            ],
+            "summary": {"total_count": 15},
+        }
+
+        features = [_make_mock_feature(fid=i) for i in range(2)]
+        alg, sink = _setup_spatial_alg(features, mock_client)
+        alg._dimension_names = ["gender"]
+        alg.parameterAsEnums = MagicMock(return_value=[0])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        assert sink.addFeature.call_count == 2
+
 
 class TestProximityStatisticsAlgorithm:
     """Test ProximityStatisticsAlgorithm parameter definitions and execution."""
@@ -297,8 +446,8 @@ class TestProximityStatisticsAlgorithm:
         alg = ProximityStatisticsAlgorithm()
         alg.addParameter = MagicMock()
         alg.initAlgorithm({})
-        # REFERENCE_POINTS, RADIUS_KM, RELATION, VARIABLES, OUTPUT
-        assert alg.addParameter.call_count == 5
+        # REFERENCE_POINTS, RADIUS_KM, RELATION, VARIABLES, GROUP_BY, OUTPUT
+        assert alg.addParameter.call_count == 6
 
     def test_process_algorithm_calls_query_proximity(self):
         """Test that processAlgorithm delegates to query_proximity."""
@@ -406,3 +555,88 @@ class TestProximityStatisticsAlgorithm:
 
         call_kwargs = mock_client.query_proximity.call_args[1]
         assert len(call_kwargs["reference_points"]) == 2
+
+    def test_init_includes_group_by_parameter(self):
+        """Test that GROUP_BY parameter is defined in initAlgorithm."""
+        alg = ProximityStatisticsAlgorithm()
+        alg.addParameter = MagicMock()
+        alg.initAlgorithm({})
+        # REFERENCE_POINTS, RADIUS_KM, RELATION, VARIABLES, GROUP_BY, OUTPUT
+        assert alg.addParameter.call_count == 6
+
+    def test_proximity_passes_group_by_to_client(self):
+        """Test that selected dimensions are passed as group_by."""
+        mock_client = MagicMock()
+        mock_client.query_proximity.return_value = {
+            "total_count": 42,
+            "statistics": {},
+        }
+
+        feature = _make_mock_point_feature()
+        alg = ProximityStatisticsAlgorithm()
+        alg._client = mock_client
+        alg._dimension_names = ["gender"]
+
+        mock_source = MagicMock()
+        mock_source.getFeatures.return_value = iter([feature])
+        mock_sink = MagicMock()
+
+        alg.parameterAsSource = MagicMock(return_value=mock_source)
+        alg.parameterAsDouble = MagicMock(return_value=10.0)
+        alg.parameterAsEnum = MagicMock(side_effect=[1, 0])
+        alg.parameterAsEnums = MagicMock(return_value=[0])
+        alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        call_kwargs = mock_client.query_proximity.call_args[1]
+        assert call_kwargs["group_by"] == ["gender"]
+
+    def test_proximity_output_includes_breakdown_fields(self):
+        """Test that proximity output includes breakdown columns."""
+        mock_client = MagicMock()
+        mock_client.query_proximity.return_value = {
+            "total_count": 42,
+            "statistics": {},
+            "breakdown": {
+                "male": {
+                    "count": 20,
+                    "statistics": {},
+                    "labels": {
+                        "gender": {"value": "1", "display": "Male"},
+                    },
+                },
+                "female": {
+                    "count": 22,
+                    "statistics": {},
+                    "labels": {
+                        "gender": {"value": "2", "display": "Female"},
+                    },
+                },
+            },
+        }
+
+        feature = _make_mock_point_feature()
+        alg = ProximityStatisticsAlgorithm()
+        alg._client = mock_client
+        alg._dimension_names = ["gender"]
+
+        mock_source = MagicMock()
+        mock_source.getFeatures.return_value = iter([feature])
+        mock_sink = MagicMock()
+
+        alg.parameterAsSource = MagicMock(return_value=mock_source)
+        alg.parameterAsDouble = MagicMock(return_value=10.0)
+        alg.parameterAsEnum = MagicMock(side_effect=[1, 0])
+        alg.parameterAsEnums = MagicMock(return_value=[0])
+        alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        mock_sink.addFeature.assert_called_once()

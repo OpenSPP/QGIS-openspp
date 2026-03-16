@@ -33,7 +33,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtCore import QVariant
 
-from .utils import fetch_variable_options
+from .utils import fetch_dimension_options, fetch_variable_options, sanitize_breakdown_field_name
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +44,14 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
     GEOMETRY = "GEOMETRY"
     VARIABLES = "VARIABLES"
     FILTER_IS_GROUP = "FILTER_IS_GROUP"
+    GROUP_BY = "GROUP_BY"
     OUTPUT = "OUTPUT"
 
     def __init__(self):
         super().__init__()
         self._client = None
         self._variable_names = []
+        self._dimension_names = []
         self._classify_field = "total_count"
         self._dest_id = None
 
@@ -78,6 +80,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         instance = SpatialStatisticsAlgorithm()
         instance._client = self._client
         instance._variable_names = self._variable_names
+        instance._dimension_names = self._dimension_names
         return instance
 
     def initAlgorithm(self, config):
@@ -110,6 +113,18 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             )
         )
 
+        # Disaggregation dimensions (populated from server if available)
+        dimension_options = self._get_dimension_options()
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.GROUP_BY,
+                "Disaggregation dimensions",
+                options=dimension_options,
+                allowMultiple=True,
+                optional=True,
+            )
+        )
+
         self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT,
@@ -128,6 +143,16 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             selected = self._variable_names[variable_idx]
             variables = [selected]
             self._classify_field = selected
+
+        # Resolve selected disaggregation dimensions
+        group_by = None
+        dim_indices = self.parameterAsEnums(parameters, self.GROUP_BY, context)
+        if dim_indices and self._dimension_names:
+            group_by = [
+                self._dimension_names[i]
+                for i in dim_indices
+                if i < len(self._dimension_names)
+            ]
 
         # Build filters
         filters = None
@@ -166,6 +191,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 geometry=geometries[0]["geometry"],
                 filters=filters,
                 variables=variables,
+                group_by=group_by,
                 use_blocking=True,
             )
             results_list = [{"id": geometries[0]["id"], **result}]
@@ -174,6 +200,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 geometries=geometries,
                 filters=filters,
                 variables=variables,
+                group_by=group_by,
                 use_blocking=True,
                 on_progress=on_progress,
             )
@@ -201,6 +228,21 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         for key in stat_keys:
             fields.append(QgsField(key, QVariant.Double))
 
+        # Collect union of breakdown keys across all results
+        breakdown_columns = {}  # {field_name: cell_key}
+        for res in results_list:
+            breakdown = res.get("breakdown")
+            if not breakdown:
+                continue
+            for cell_key, cell_data in breakdown.items():
+                labels = cell_data.get("labels", {})
+                field_name = sanitize_breakdown_field_name(labels)
+                if field_name not in breakdown_columns:
+                    breakdown_columns[field_name] = cell_key
+        breakdown_field_names = sorted(breakdown_columns.keys())
+        for field_name in breakdown_field_names:
+            fields.append(QgsField(field_name, QVariant.Double))
+
         sink, dest_id = self.parameterAsSink(
             parameters,
             self.OUTPUT,
@@ -224,6 +266,19 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             for key in stat_keys:
                 val = res.get("statistics", {}).get(key, 0)
                 attrs.append(float(val) if val is not None else 0.0)
+
+            # Add breakdown values (missing cells default to 0.0)
+            breakdown = res.get("breakdown") or {}
+            # Build a lookup from field_name to count
+            bd_values = {}
+            for cell_key, cell_data in breakdown.items():
+                labels = cell_data.get("labels", {})
+                field_name = sanitize_breakdown_field_name(labels)
+                bd_values[field_name] = cell_data.get("count", 0)
+            for field_name in breakdown_field_names:
+                val = bd_values.get(field_name, 0)
+                attrs.append(float(val) if val is not None else 0.0)
+
             feat.setAttributes(attrs)
             sink.addFeature(feat)
 
@@ -295,4 +350,10 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         """Fetch variable names from the server for the enum dropdown."""
         names = fetch_variable_options(self._client, self._variable_names)
         self._variable_names = names
+        return list(names)
+
+    def _get_dimension_options(self):
+        """Fetch dimension names from the server for the enum dropdown."""
+        names = fetch_dimension_options(self._client, self._dimension_names)
+        self._dimension_names = names
         return list(names)

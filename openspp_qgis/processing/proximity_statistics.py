@@ -30,7 +30,7 @@ from qgis.core import (
 )
 from qgis.PyQt.QtCore import QVariant
 
-from .utils import fetch_variable_options
+from .utils import fetch_dimension_options, fetch_variable_options, sanitize_breakdown_field_name
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +44,14 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
     RADIUS_KM = "RADIUS_KM"
     RELATION = "RELATION"
     VARIABLES = "VARIABLES"
+    GROUP_BY = "GROUP_BY"
     OUTPUT = "OUTPUT"
 
     def __init__(self):
         super().__init__()
         self._client = None
         self._variable_names = []
+        self._dimension_names = []
         self._dest_id = None
 
     def name(self):
@@ -77,6 +79,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         instance = ProximityStatisticsAlgorithm()
         instance._client = self._client
         instance._variable_names = self._variable_names
+        instance._dimension_names = self._dimension_names
         return instance
 
     def initAlgorithm(self, config):
@@ -120,6 +123,18 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
             )
         )
 
+        # Disaggregation dimensions (populated from server if available)
+        dimension_options = self._get_dimension_options()
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.GROUP_BY,
+                "Disaggregation dimensions",
+                options=dimension_options,
+                allowMultiple=True,
+                optional=True,
+            )
+        )
+
         self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT,
@@ -143,6 +158,16 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         variables = None
         if self._variable_names and variable_idx < len(self._variable_names):
             variables = [self._variable_names[variable_idx]]
+
+        # Resolve selected disaggregation dimensions
+        group_by = None
+        dim_indices = self.parameterAsEnums(parameters, self.GROUP_BY, context)
+        if dim_indices and self._dimension_names:
+            group_by = [
+                self._dimension_names[i]
+                for i in dim_indices
+                if i < len(self._dimension_names)
+            ]
 
         # Collect reference points from source
         reference_points = []
@@ -178,6 +203,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
             radius_km=radius_km,
             relation=relation,
             variables=variables,
+            group_by=group_by,
             use_blocking=True,
             on_progress=on_progress,
         )
@@ -202,6 +228,19 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         for key in stat_keys:
             fields.append(QgsField(key, QVariant.Double))
 
+        # Add breakdown fields
+        breakdown = result.get("breakdown") or {}
+        breakdown_field_names = []
+        bd_values = {}
+        for cell_key, cell_data in breakdown.items():
+            labels = cell_data.get("labels", {})
+            field_name = sanitize_breakdown_field_name(labels)
+            breakdown_field_names.append(field_name)
+            bd_values[field_name] = cell_data.get("count", 0)
+        breakdown_field_names.sort()
+        for field_name in breakdown_field_names:
+            fields.append(QgsField(field_name, QVariant.Double))
+
         sink, dest_id = self.parameterAsSink(
             parameters,
             self.OUTPUT,
@@ -222,6 +261,9 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         for key in stat_keys:
             val = stats.get(key, 0)
             attrs.append(float(val) if val is not None else 0.0)
+        for field_name in breakdown_field_names:
+            val = bd_values.get(field_name, 0)
+            attrs.append(float(val) if val is not None else 0.0)
         feat.setAttributes(attrs)
         sink.addFeature(feat)
         del sink
@@ -240,4 +282,10 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         """Fetch variable names from the server for the enum dropdown."""
         names = fetch_variable_options(self._client, self._variable_names)
         self._variable_names = names
+        return list(names)
+
+    def _get_dimension_options(self):
+        """Fetch dimension names from the server for the enum dropdown."""
+        names = fetch_dimension_options(self._client, self._dimension_names)
+        self._dimension_names = names
         return list(names)
