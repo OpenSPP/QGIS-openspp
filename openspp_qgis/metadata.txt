@@ -22,7 +22,7 @@ homepage=https://openspp.org
 tags=social protection,GIS,spatial analysis,disaster response,anticipatory action
 
 category=Web
-icon=icons/openspp.svg
+icon=icons/openspp.png
 experimental=True
 deprecated=False
 hasProcessingProvider=yes
