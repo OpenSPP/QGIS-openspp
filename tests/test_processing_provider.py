@@ -113,8 +113,8 @@ def _setup_proximity_alg(features, client, radius_km=10.0, relation_idx=1, var_i
 
     alg.parameterAsSource = MagicMock(return_value=mock_source)
     alg.parameterAsDouble = MagicMock(return_value=radius_km)
-    # parameterAsEnum is called twice: once for RELATION, once for VARIABLES
-    alg.parameterAsEnum = MagicMock(side_effect=[relation_idx, var_idx])
+    # parameterAsEnum is called for: RELATION, VARIABLES, PROGRAM, CEL_EXPRESSION, FILTER_MODE
+    alg.parameterAsEnum = MagicMock(side_effect=[relation_idx, var_idx, 0, 0, 0])
     alg.parameterAsEnums = MagicMock(return_value=[])
     alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
 
@@ -150,8 +150,8 @@ class TestSpatialStatisticsAlgorithm:
         alg = SpatialStatisticsAlgorithm()
         alg.addParameter = MagicMock()
         alg.initAlgorithm({})
-        # GEOMETRY, VARIABLES, FILTER_IS_GROUP, GROUP_BY, OUTPUT
-        assert alg.addParameter.call_count == 5
+        # GEOMETRY, VARIABLES, FILTER_IS_GROUP, GROUP_BY, PROGRAM, CEL_EXPRESSION, FILTER_MODE, OUTPUT
+        assert alg.addParameter.call_count == 8
 
     def test_process_algorithm_single_geometry(self):
         """Test processAlgorithm with a single polygon feature."""
@@ -274,8 +274,8 @@ class TestSpatialStatisticsAlgorithm:
         alg = SpatialStatisticsAlgorithm()
         alg.addParameter = MagicMock()
         alg.initAlgorithm({})
-        # GEOMETRY, VARIABLES, FILTER_IS_GROUP, GROUP_BY, OUTPUT
-        assert alg.addParameter.call_count == 5
+        # GEOMETRY, VARIABLES, FILTER_IS_GROUP, GROUP_BY, PROGRAM, CEL_EXPRESSION, FILTER_MODE, OUTPUT
+        assert alg.addParameter.call_count == 8
 
     def test_process_algorithm_uses_parameter_as_enums_for_group_by(self):
         """Test that parameterAsEnums (plural) is used for GROUP_BY multi-select."""
@@ -549,8 +549,8 @@ class TestProximityStatisticsAlgorithm:
         alg = ProximityStatisticsAlgorithm()
         alg.addParameter = MagicMock()
         alg.initAlgorithm({})
-        # REFERENCE_POINTS, RADIUS_KM, RELATION, VARIABLES, GROUP_BY, OUTPUT
-        assert alg.addParameter.call_count == 6
+        # REFERENCE_POINTS, RADIUS_KM, RELATION, VARIABLES, GROUP_BY, PROGRAM, CEL_EXPRESSION, FILTER_MODE, OUTPUT
+        assert alg.addParameter.call_count == 9
 
     def test_process_algorithm_calls_query_proximity(self):
         """Test that processAlgorithm delegates to query_proximity."""
@@ -664,8 +664,8 @@ class TestProximityStatisticsAlgorithm:
         alg = ProximityStatisticsAlgorithm()
         alg.addParameter = MagicMock()
         alg.initAlgorithm({})
-        # REFERENCE_POINTS, RADIUS_KM, RELATION, VARIABLES, GROUP_BY, OUTPUT
-        assert alg.addParameter.call_count == 6
+        # REFERENCE_POINTS, RADIUS_KM, RELATION, VARIABLES, GROUP_BY, PROGRAM, CEL_EXPRESSION, FILTER_MODE, OUTPUT
+        assert alg.addParameter.call_count == 9
 
     def test_proximity_passes_group_by_to_client(self):
         """Test that selected dimensions are passed as group_by."""
@@ -686,7 +686,7 @@ class TestProximityStatisticsAlgorithm:
 
         alg.parameterAsSource = MagicMock(return_value=mock_source)
         alg.parameterAsDouble = MagicMock(return_value=10.0)
-        alg.parameterAsEnum = MagicMock(side_effect=[1, 0])
+        alg.parameterAsEnum = MagicMock(side_effect=[1, 0, 0, 0, 0])
         alg.parameterAsEnums = MagicMock(return_value=[0])
         alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
 
@@ -733,7 +733,7 @@ class TestProximityStatisticsAlgorithm:
 
         alg.parameterAsSource = MagicMock(return_value=mock_source)
         alg.parameterAsDouble = MagicMock(return_value=10.0)
-        alg.parameterAsEnum = MagicMock(side_effect=[1, 0])
+        alg.parameterAsEnum = MagicMock(side_effect=[1, 0, 0, 0, 0])
         alg.parameterAsEnums = MagicMock(return_value=[0])
         alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
 

@@ -869,9 +869,13 @@ class OpenSppPlugin:
                 progress_bar, cancelled
             )
 
+            # Read population filter from stats panel
+            population_filter = self.stats_panel.get_population_filter() if self.stats_panel else None
+
             # Use batch endpoint for per-shape results
             result = self.client.query_statistics_batch(
-                geometries, on_progress=on_progress
+                geometries, on_progress=on_progress,
+                population_filter=population_filter,
             )
 
             # Clear progress message
@@ -899,6 +903,7 @@ class OpenSppPlugin:
                 "feature_geometries": feature_geometries,
                 "filters": None,
                 "variables": None,
+                "population_filter": population_filter,
             }
 
             # Pass both batch results and original geometries for visualization
@@ -943,6 +948,7 @@ class OpenSppPlugin:
         dialog = ProximityDialog(
             parent=self.iface.mainWindow(),
             iface=self.iface,
+            client=self.client,
         )
 
         if not dialog.exec_():
@@ -996,6 +1002,7 @@ class OpenSppPlugin:
                 radius_km=dialog.radius_km,
                 relation=dialog.relation,
                 on_progress=on_progress,
+                population_filter=dialog.population_filter,
             )
 
             # Clear progress message
@@ -1024,6 +1031,7 @@ class OpenSppPlugin:
                 "relation": dialog.relation,
                 "filters": None,
                 "variables": None,
+                "population_filter": dialog.population_filter,
             }
 
             self.stats_panel.show_proximity_results(
@@ -1084,6 +1092,7 @@ class OpenSppPlugin:
                     variables=params.get("variables"),
                     group_by=dimensions,
                     on_progress=on_progress,
+                    population_filter=params.get("population_filter"),
                 )
 
                 self.iface.messageBar().popWidget(msg_bar)
@@ -1103,6 +1112,7 @@ class OpenSppPlugin:
                     variables=params.get("variables"),
                     group_by=dimensions,
                     on_progress=on_progress,
+                    population_filter=params.get("population_filter"),
                 )
 
                 self.iface.messageBar().popWidget(msg_bar)

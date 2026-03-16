@@ -983,6 +983,7 @@ class OpenSppClient:
         filters: dict | None = None,
         variables: list | None = None,
         group_by: list | None = None,
+        population_filter: dict | None = None,
         use_blocking: bool = False,
     ) -> dict:
         """Query registrant statistics within polygon.
@@ -994,6 +995,7 @@ class OpenSppClient:
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
             group_by: Disaggregation dimensions (e.g., ["gender", "age_group"])
+            population_filter: Population filter (program, expression, mode)
             use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
@@ -1006,6 +1008,8 @@ class OpenSppClient:
             inputs["variables"] = variables
         if group_by:
             inputs["group_by"] = group_by
+        if population_filter:
+            inputs["population_filter"] = population_filter
 
         return self._execute_process(
             self.PROCESS_SPATIAL_STATISTICS, inputs, use_blocking=use_blocking
@@ -1017,6 +1021,7 @@ class OpenSppClient:
         filters: dict | None = None,
         variables: list | None = None,
         group_by: list | None = None,
+        population_filter: dict | None = None,
         on_progress=None,
         use_blocking: bool = False,
     ) -> dict:
@@ -1031,6 +1036,7 @@ class OpenSppClient:
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
             group_by: Disaggregation dimensions (e.g., ["gender", "age_group"])
+            population_filter: Population filter (program, expression, mode)
             use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
@@ -1049,6 +1055,8 @@ class OpenSppClient:
             inputs["variables"] = variables
         if group_by:
             inputs["group_by"] = group_by
+        if population_filter:
+            inputs["population_filter"] = population_filter
 
         prefer_async = len(geometries) > self.ASYNC_BATCH_THRESHOLD
 
@@ -1072,6 +1080,7 @@ class OpenSppClient:
         filters: dict | None = None,
         variables: list | None = None,
         group_by: list | None = None,
+        population_filter: dict | None = None,
         on_progress=None,
         use_blocking: bool = False,
     ) -> dict:
@@ -1086,6 +1095,7 @@ class OpenSppClient:
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
             group_by: Disaggregation dimensions (e.g., ["gender", "age_group"])
+            population_filter: Population filter (program, expression, mode)
             use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
@@ -1102,6 +1112,8 @@ class OpenSppClient:
             inputs["variables"] = variables
         if group_by:
             inputs["group_by"] = group_by
+        if population_filter:
+            inputs["population_filter"] = population_filter
 
         return self._execute_process(
             self.PROCESS_PROXIMITY_STATISTICS,
@@ -1222,6 +1234,39 @@ class OpenSppClient:
                 Qgis.Warning,
             )
         return []
+
+    def get_population_filter_metadata(
+        self,
+        force_refresh: bool = False,
+    ) -> dict:
+        """Extract population filter metadata from the spatial-statistics process description.
+
+        Reads x-openspp-programs and x-openspp-expressions from the
+        population_filter input.
+
+        Args:
+            force_refresh: Bypass cache and fetch fresh data
+
+        Returns:
+            Dict with "programs" and "expressions" lists
+        """
+        try:
+            desc = self.get_process_description(
+                self.PROCESS_SPATIAL_STATISTICS,
+                force_refresh=force_refresh,
+            )
+            inputs = desc.get("inputs", {})
+            pop_filter_input = inputs.get("population_filter", {})
+            programs = pop_filter_input.get("x-openspp-programs", [])
+            expressions = pop_filter_input.get("x-openspp-expressions", [])
+            return {"programs": programs, "expressions": expressions}
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f"Failed to read population filter metadata: {e}",
+                "OpenSPP",
+                Qgis.Warning,
+            )
+        return {"programs": [], "expressions": []}
 
     # === Geofence Endpoints ===
 

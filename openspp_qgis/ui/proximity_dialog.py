@@ -18,6 +18,8 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+from .population_filter_widget import PopulationFilterWidget
+
 
 class ProximityDialog(QDialog):
     """Dialog for proximity query parameters.
@@ -30,21 +32,29 @@ class ProximityDialog(QDialog):
     # Warn user when sending more than this many points
     LARGE_POINT_SET_THRESHOLD = 5000
 
-    def __init__(self, parent=None, iface=None):
+    def __init__(self, parent=None, iface=None, client=None):
         """Initialize proximity dialog.
 
         Args:
             parent: Parent widget
             iface: QGIS interface (for accessing loaded layers)
+            client: OpenSppClient instance (for populating filter options)
         """
         super().__init__(parent)
         self.iface = iface
+        self._client = client
 
         self.setWindowTitle("Proximity Query")
         self.setMinimumWidth(400)
 
         self._setup_ui()
         self._populate_layers()
+
+        if self._client:
+            try:
+                self._filter_widget.populate(self._client)
+            except Exception:
+                pass
 
     def _setup_ui(self):
         """Set up dialog UI elements."""
@@ -85,6 +95,10 @@ class ProximityDialog(QDialog):
         form.addRow("Find registrants:", self.relation_combo)
 
         layout.addLayout(form)
+
+        # Population filter
+        self._filter_widget = PopulationFilterWidget()
+        layout.addWidget(self._filter_widget)
 
         # Point count info
         self.point_count_label = QLabel("")
@@ -211,3 +225,12 @@ class ProximityDialog(QDialog):
             str
         """
         return self.relation_combo.currentData()
+
+    @property
+    def population_filter(self):
+        """Get the population filter selection.
+
+        Returns:
+            dict or None
+        """
+        return self._filter_widget.get_filter()

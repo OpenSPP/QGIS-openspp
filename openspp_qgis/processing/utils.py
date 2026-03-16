@@ -68,6 +68,58 @@ def fetch_dimension_options(client, cached_names=None):
         return []
 
 
+def fetch_program_options(client, cached=None):
+    """Fetch program names and IDs from the server for Processing enum dropdowns.
+
+    Args:
+        client: OpenSppClient instance (or None)
+        cached: Previously fetched (labels, values) tuple (returned as-is if truthy)
+
+    Returns:
+        Tuple of (labels, values) where labels are display names and values are API IDs
+    """
+    if cached:
+        return cached
+
+    if not client:
+        return [], []
+
+    try:
+        metadata = client.get_population_filter_metadata()
+        programs = metadata.get("programs", [])
+        labels = [p["name"] for p in programs if p.get("name")]
+        values = [p["id"] for p in programs if p.get("name")]
+        return labels, values
+    except Exception:
+        return [], []
+
+
+def fetch_expression_options(client, cached=None):
+    """Fetch CEL expression names and codes from the server for Processing enum dropdowns.
+
+    Args:
+        client: OpenSppClient instance (or None)
+        cached: Previously fetched (labels, values) tuple (returned as-is if truthy)
+
+    Returns:
+        Tuple of (labels, values) where labels are display names and values are expression codes
+    """
+    if cached:
+        return cached
+
+    if not client:
+        return [], []
+
+    try:
+        metadata = client.get_population_filter_metadata()
+        expressions = metadata.get("expressions", [])
+        labels = [e["name"] for e in expressions if e.get("name")]
+        values = [e["code"] for e in expressions if e.get("name")]
+        return labels, values
+    except Exception:
+        return [], []
+
+
 def sanitize_breakdown_field_name(labels):
     """Build a QGIS-safe field name from a breakdown cell's labels dict.
 

@@ -235,3 +235,82 @@ class TestPluginDisaggregationHandler:
         call_kwargs = plugin.client.query_proximity.call_args[1]
         assert call_kwargs["group_by"] == ["gender"]
         plugin.stats_panel.show_proximity_results.assert_called_once()
+
+
+class TestPopulationFilterRoundTrip:
+    """Test that population_filter flows through query_params to re-query."""
+
+    def test_spatial_batch_preserves_population_filter(self):
+        """population_filter in _last_query_params is passed to query_statistics_batch."""
+        from openspp_qgis.openspp_plugin import OpenSppPlugin
+
+        plugin = object.__new__(OpenSppPlugin)
+        plugin.iface = MagicMock()
+        plugin.iface.mainWindow.return_value = MagicMock()
+        plugin.client = MagicMock()
+        plugin.stats_panel = MagicMock()
+        plugin.stats_panel._last_query_params = {
+            "query_type": "spatial_batch",
+            "geometries": [{"id": "z1", "geometry": {"type": "Polygon"}}],
+            "feature_geometries": [{"id": "z1", "geometry": MagicMock()}],
+            "filters": None,
+            "variables": ["count"],
+            "population_filter": {"program": 5, "cel_expression": "vuln", "mode": "and"},
+        }
+
+        enriched = {
+            "results": [{"id": "z1", "total_count": 100, "statistics": {}}],
+            "summary": {"total_count": 100, "geometries_queried": 1, "statistics": {}},
+        }
+        plugin.client.query_statistics_batch.return_value = enriched
+        plugin._create_progress_widget = MagicMock(
+            return_value=(MagicMock(), MagicMock(), MagicMock(), [False])
+        )
+        plugin._make_progress_callback = MagicMock(return_value=lambda s, p, m: True)
+        plugin.tr = lambda x: x
+
+        plugin._on_disaggregation_requested(["gender"])
+
+        plugin.client.query_statistics_batch.assert_called_once()
+        call_kwargs = plugin.client.query_statistics_batch.call_args[1]
+        assert call_kwargs["population_filter"] == {
+            "program": 5,
+            "cel_expression": "vuln",
+            "mode": "and",
+        }
+
+    def test_proximity_preserves_population_filter(self):
+        """population_filter in _last_query_params is passed to query_proximity."""
+        from openspp_qgis.openspp_plugin import OpenSppPlugin
+
+        plugin = object.__new__(OpenSppPlugin)
+        plugin.iface = MagicMock()
+        plugin.iface.mainWindow.return_value = MagicMock()
+        plugin.client = MagicMock()
+        plugin.stats_panel = MagicMock()
+        plugin.stats_panel._last_query_params = {
+            "query_type": "proximity",
+            "reference_points": [{"longitude": 28.0, "latitude": -2.0}],
+            "radius_km": 10.0,
+            "relation": "beyond",
+            "filters": None,
+            "variables": None,
+            "population_filter": {"cel_expression": "elderly"},
+        }
+
+        enriched = {
+            "total_count": 42,
+            "statistics": {},
+        }
+        plugin.client.query_proximity.return_value = enriched
+        plugin._create_progress_widget = MagicMock(
+            return_value=(MagicMock(), MagicMock(), MagicMock(), [False])
+        )
+        plugin._make_progress_callback = MagicMock(return_value=lambda s, p, m: True)
+        plugin.tr = lambda x: x
+
+        plugin._on_disaggregation_requested(["gender"])
+
+        plugin.client.query_proximity.assert_called_once()
+        call_kwargs = plugin.client.query_proximity.call_args[1]
+        assert call_kwargs["population_filter"] == {"cel_expression": "elderly"}

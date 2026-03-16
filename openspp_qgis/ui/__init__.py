@@ -3,12 +3,14 @@
 
 from .connection_dialog import ConnectionDialog
 from .geofence_dialog import GeofenceDialog
+from .population_filter_widget import PopulationFilterWidget
 from .proximity_dialog import ProximityDialog
 from .stats_panel import StatsPanel
 
 __all__ = [
     "ConnectionDialog",
     "GeofenceDialog",
+    "PopulationFilterWidget",
     "ProximityDialog",
     "StatsPanel",
 ]

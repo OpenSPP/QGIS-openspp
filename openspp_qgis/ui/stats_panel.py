@@ -22,6 +22,8 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from .population_filter_widget import PopulationFilterWidget
+
 
 class StatsPanel(QDockWidget):
     """Dock widget for displaying spatial query statistics.
@@ -57,6 +59,12 @@ class StatsPanel(QDockWidget):
 
         self._setup_ui()
 
+        # Populate filter widget from server if client available
+        try:
+            self.population_filter_widget.populate(self.client)
+        except Exception:
+            pass
+
     def _setup_ui(self):
         """Setup panel UI elements."""
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
@@ -67,6 +75,15 @@ class StatsPanel(QDockWidget):
         # Header
         self.header_label = QLabel("<b>Query Results</b>")
         layout.addWidget(self.header_label)
+
+        # Population filter (persistent across queries)
+        self.population_filter_widget = PopulationFilterWidget()
+        layout.addWidget(self.population_filter_widget)
+
+        # Filter context label (shows active filter description)
+        self._filter_label = QLabel("")
+        self._filter_label.setVisible(False)
+        layout.addWidget(self._filter_label)
 
         # Summary section
         self.summary_label = QLabel("No results yet")
@@ -177,6 +194,8 @@ class StatsPanel(QDockWidget):
             self._last_query_params = query_params
             self.disaggregate_btn.setEnabled(True)
 
+        self._update_filter_label()
+
         # Update summary from batch summary
         summary = result.get("summary", {})
         total_count = summary.get("total_count", 0)
@@ -219,6 +238,8 @@ class StatsPanel(QDockWidget):
             self._last_query_params = query_params
             self.disaggregate_btn.setEnabled(True)
 
+        self._update_filter_label()
+
         total_count = result.get("total_count", 0)
         query_method = result.get("query_method", "unknown")
         areas_matched = result.get("areas_matched", 0)
@@ -249,6 +270,24 @@ class StatsPanel(QDockWidget):
         self.variable_combo.setEnabled(False)
         self.apply_btn.setEnabled(False)
         self.copy_btn.setEnabled(True)
+
+    def get_population_filter(self):
+        """Get the current population filter from the filter widget.
+
+        Returns:
+            dict or None: The population_filter dict, or None
+        """
+        return self.population_filter_widget.get_filter()
+
+    def _update_filter_label(self):
+        """Update the filter context label from query params."""
+        if self._last_query_params and self._last_query_params.get("population_filter"):
+            desc = self.population_filter_widget.describe_filter()
+            if desc:
+                self._filter_label.setText(f"<i>Filter: {desc}</i>")
+                self._filter_label.setVisible(True)
+                return
+        self._filter_label.setVisible(False)
 
     def _populate_stats_tree(self, statistics):
         """Populate the statistics tree with collapsible categories.
@@ -737,6 +776,7 @@ class StatsPanel(QDockWidget):
         self._last_query_params = None
         self.copy_btn.setEnabled(False)
         self.disaggregate_btn.setEnabled(False)
+        self._filter_label.setVisible(False)
 
         # Remove visualization layer if it exists
         if self._viz_layer is not None:

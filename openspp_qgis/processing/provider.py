@@ -66,3 +66,7 @@ class OpenSppProvider(QgsProcessingProvider):
             alg._client = client
             alg._variable_names = []
             alg._dimension_names = []
+            alg._program_labels = []
+            alg._program_values = []
+            alg._expression_labels = []
+            alg._expression_values = []

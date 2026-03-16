@@ -33,7 +33,13 @@ from qgis.core import (
 )
 from qgis.PyQt.QtCore import QVariant
 
-from .utils import fetch_dimension_options, fetch_variable_options, sanitize_breakdown_field_name
+from .utils import (
+    fetch_dimension_options,
+    fetch_expression_options,
+    fetch_program_options,
+    fetch_variable_options,
+    sanitize_breakdown_field_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +65,9 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
     VARIABLES = "VARIABLES"
     FILTER_IS_GROUP = "FILTER_IS_GROUP"
     GROUP_BY = "GROUP_BY"
+    PROGRAM = "PROGRAM"
+    CEL_EXPRESSION = "CEL_EXPRESSION"
+    FILTER_MODE = "FILTER_MODE"
     OUTPUT = "OUTPUT"
 
     def __init__(self):
@@ -66,6 +75,10 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         self._client = None
         self._variable_names = []
         self._dimension_names = []
+        self._program_labels = []
+        self._program_values = []
+        self._expression_labels = []
+        self._expression_values = []
         self._classify_field = "total_count"
         self._dest_id = None
         self._breakdown_layer_info = {}  # {field_name: display_label}
@@ -97,6 +110,10 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         instance._client = self._client
         instance._variable_names = self._variable_names
         instance._dimension_names = self._dimension_names
+        instance._program_labels = self._program_labels
+        instance._program_values = self._program_values
+        instance._expression_labels = self._expression_labels
+        instance._expression_values = self._expression_values
         instance._breakdown_layer_info = self._breakdown_layer_info
         return instance
 
@@ -142,6 +159,45 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             )
         )
 
+        # Population filter: program selection
+        program_options = self._get_program_options()
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.PROGRAM,
+                "Population filter: program",
+                options=program_options,
+                allowMultiple=False,
+                optional=True,
+            )
+        )
+
+        # Population filter: CEL expression selection
+        expression_options = self._get_expression_options()
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.CEL_EXPRESSION,
+                "Population filter: CEL expression",
+                options=expression_options,
+                allowMultiple=False,
+                optional=True,
+            )
+        )
+
+        # Population filter: combination mode
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FILTER_MODE,
+                "Population filter: combination mode",
+                options=[
+                    "Both must match (AND)",
+                    "Either matches (OR)",
+                    "Eligible but not enrolled (Gap)",
+                ],
+                allowMultiple=False,
+                optional=True,
+            )
+        )
+
         self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT,
@@ -173,6 +229,26 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             self._selected_dimension_labels = [
                 name.replace("_", " ").title() for name in group_by
             ]
+
+        # Resolve population filter
+        population_filter = None
+        program_idx = self.parameterAsEnum(parameters, self.PROGRAM, context)
+        expression_idx = self.parameterAsEnum(parameters, self.CEL_EXPRESSION, context)
+        mode_idx = self.parameterAsEnum(parameters, self.FILTER_MODE, context)
+
+        has_program = self._program_values and program_idx < len(self._program_values)
+        has_expression = self._expression_values and expression_idx < len(self._expression_values)
+
+        if has_program or has_expression:
+            population_filter = {}
+            if has_program:
+                population_filter["program"] = self._program_values[program_idx]
+            if has_expression:
+                population_filter["cel_expression"] = self._expression_values[expression_idx]
+            if has_program and has_expression:
+                mode_options = ["and", "or", "gap"]
+                if mode_idx < len(mode_options):
+                    population_filter["mode"] = mode_options[mode_idx]
 
         # Build filters
         filters = None
@@ -212,6 +288,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 filters=filters,
                 variables=variables,
                 group_by=group_by,
+                population_filter=population_filter,
                 use_blocking=True,
             )
             results_list = [{"id": geometries[0]["id"], **result}]
@@ -221,6 +298,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 filters=filters,
                 variables=variables,
                 group_by=group_by,
+                population_filter=population_filter,
                 use_blocking=True,
                 on_progress=on_progress,
             )
@@ -427,3 +505,19 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         names = fetch_dimension_options(self._client, self._dimension_names)
         self._dimension_names = names
         return list(names)
+
+    def _get_program_options(self):
+        """Fetch program names from the server for the enum dropdown."""
+        cached = (self._program_labels, self._program_values) if self._program_labels else None
+        labels, values = fetch_program_options(self._client, cached)
+        self._program_labels = labels
+        self._program_values = values
+        return list(labels)
+
+    def _get_expression_options(self):
+        """Fetch CEL expression names from the server for the enum dropdown."""
+        cached = (self._expression_labels, self._expression_values) if self._expression_labels else None
+        labels, values = fetch_expression_options(self._client, cached)
+        self._expression_labels = labels
+        self._expression_values = values
+        return list(labels)
