@@ -510,8 +510,8 @@ calls.
 
 ### Phase F: Verify
 
-- [ ] Run full test suite
-- [ ] Run linters (ruff, ruff-format)
+- [x] Run full test suite
+- [x] Run linters (ruff, ruff-format)
 - [ ] Manual test against server with Phase D deployed (when available)
 
 ## Staff Engineer Review Findings (Addressed)
