@@ -24,43 +24,79 @@ from qgis.PyQt.QtWidgets import (
 )
 
 
+# Maps combo box labels to API type values
+_TYPE_MAP = {
+    "Custom Area": "custom",
+    "Hazard Zone": "hazard_zone",
+    "Service Area": "service_area",
+    "Targeting Area": "targeting_area",
+}
+_TYPE_LABELS = list(_TYPE_MAP.keys())
+_TYPE_REVERSE = {v: k for k, v in _TYPE_MAP.items()}
+
+
 class GeofenceDialog(QDialog):
-    """Dialog for saving selected polygon as a geofence.
+    """Dialog for saving or editing a geofence.
 
     Allows users to:
     - Name the geofence
     - Add description
     - Select geofence type
     - Optionally link to an incident
+
+    In edit mode (feature_id provided), pre-fills fields and uses PUT instead of POST.
     """
 
-    def __init__(self, parent=None, geometry=None, client=None):
+    def __init__(
+        self,
+        parent=None,
+        geometry=None,
+        client=None,
+        feature_id=None,
+        feature_data=None,
+    ):
         """Initialize dialog.
 
         Args:
             parent: Parent widget
             geometry: QgsGeometry to save as geofence
             client: OpenSppClient instance
+            feature_id: UUID of existing geofence (edit mode)
+            feature_data: Dict with existing geofence properties (edit mode)
         """
         super().__init__(parent)
         self.geometry = geometry
         self.client = client
         self.geofence_name = ""
+        self.geofence_uuid = None
+        self.feature_id = feature_id
 
         self._setup_ui()
 
+        if feature_data:
+            self._prefill(feature_data)
+
     def _setup_ui(self):
         """Setup dialog UI elements."""
-        self.setWindowTitle("Save Geofence")
+        if self.feature_id:
+            self.setWindowTitle("Edit Geofence")
+        else:
+            self.setWindowTitle("Save Geofence")
         self.setMinimumWidth(400)
 
         layout = QVBoxLayout(self)
 
         # Header
-        header = QLabel(
-            "<b>Save Selection as Geofence</b><br>"
-            "Save the selected polygon to OpenSPP as an area of interest."
-        )
+        if self.feature_id:
+            header = QLabel(
+                "<b>Edit Geofence</b><br>"
+                "Update the geofence properties."
+            )
+        else:
+            header = QLabel(
+                "<b>Save Selection as Geofence</b><br>"
+                "Save the selected polygon to OpenSPP as an area of interest."
+            )
         layout.addWidget(header)
 
         # Show geometry info
@@ -98,12 +134,7 @@ class GeofenceDialog(QDialog):
         form.addRow("Description:", self.description_edit)
 
         self.type_combo = QComboBox()
-        self.type_combo.addItems([
-            "Custom Area",
-            "Hazard Zone",
-            "Service Area",
-            "Targeting Area",
-        ])
+        self.type_combo.addItems(_TYPE_LABELS)
         form.addRow("Type:", self.type_combo)
 
         self.incident_edit = QLineEdit()
@@ -120,19 +151,32 @@ class GeofenceDialog(QDialog):
         self.button_box.rejected.connect(self.reject)
         layout.addWidget(self.button_box)
 
+    def _prefill(self, feature_data):
+        """Pre-fill form fields from existing feature data.
+
+        Args:
+            feature_data: Dict with keys like name, description, geofence_type, incident_code
+        """
+        if "name" in feature_data:
+            self.name_edit.setText(feature_data["name"])
+        if "description" in feature_data and feature_data["description"]:
+            self.description_edit.setPlainText(feature_data["description"])
+        if "geofence_type" in feature_data:
+            label = _TYPE_REVERSE.get(feature_data["geofence_type"])
+            if label:
+                idx = self.type_combo.findText(label)
+                if idx >= 0:
+                    self.type_combo.setCurrentIndex(idx)
+        if "incident_code" in feature_data and feature_data["incident_code"]:
+            self.incident_edit.setText(feature_data["incident_code"])
+
     def _get_geofence_type(self):
         """Get selected geofence type value.
 
         Returns:
             Type string for API (hazard_zone, service_area, etc.)
         """
-        type_map = {
-            "Custom Area": "custom",
-            "Hazard Zone": "hazard_zone",
-            "Service Area": "service_area",
-            "Targeting Area": "targeting_area",
-        }
-        return type_map.get(self.type_combo.currentText(), "custom")
+        return _TYPE_MAP.get(self.type_combo.currentText(), "custom")
 
     def _on_save(self):
         """Validate and save geofence."""
@@ -174,8 +218,7 @@ class GeofenceDialog(QDialog):
             geofence_type = self._get_geofence_type()
             incident_code = self.incident_edit.text().strip() or None
 
-            # Create geofence via API
-            result = self.client.create_geofence(
+            kwargs = dict(
                 name=name,
                 geometry=geometry_dict,
                 description=description,
@@ -183,11 +226,21 @@ class GeofenceDialog(QDialog):
                 incident_code=incident_code,
             )
 
-            # Store name for success message
-            self.geofence_name = name
+            if self.feature_id:
+                result = self.client.update_geofence(
+                    feature_id=self.feature_id, **kwargs
+                )
+            else:
+                result = self.client.create_geofence(**kwargs)
 
+            # Store name and UUID from response for status messaging
+            self.geofence_name = name
+            if isinstance(result, dict):
+                self.geofence_uuid = result.get("id")
+
+            action = "Updated" if self.feature_id else "Created"
             QgsMessageLog.logMessage(
-                f"Created geofence: {result}",
+                f"{action} geofence: {result}",
                 "OpenSPP",
                 Qgis.Info,
             )

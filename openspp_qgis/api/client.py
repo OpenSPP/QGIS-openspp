@@ -272,6 +272,9 @@ class OpenSppClient:
             elif method == "POST":
                 body = QByteArray(json.dumps(data or {}).encode())
                 reply = self.network_manager.post(request, body)
+            elif method == "PUT":
+                body = QByteArray(json.dumps(data or {}).encode())
+                reply = self.network_manager.put(request, body)
             elif method == "DELETE":
                 reply = self.network_manager.deleteResource(request)
             else:
@@ -320,6 +323,19 @@ class OpenSppClient:
                             "Authentication failed. Please check your credentials."
                         )
                     else:
+                        # Include the response body when available so
+                        # server-side validation messages (400, etc.)
+                        # are surfaced to the caller.
+                        response_body = reply.readAll().data()
+                        detail = ""
+                        if response_body:
+                            try:
+                                body_json = json.loads(response_body.decode("utf-8"))
+                                detail = body_json.get("detail") or body_json.get("message") or ""
+                            except (json.JSONDecodeError, UnicodeDecodeError):
+                                detail = response_body.decode("utf-8", errors="replace")
+                        if detail:
+                            raise Exception(f"Server error ({status_code}): {detail}")
                         raise Exception(f"Network error: {error_msg}")
 
             # Parse response
@@ -505,7 +521,13 @@ class OpenSppClient:
         try:
             result = self._sync_request("/ogc/collections")
             collections = result.get("collections", [])
-            reports = sum(1 for c in collections if not c.get("id", "").startswith("layer_"))
+            # Exclude non-report/non-layer collections (e.g., "geofences")
+            EXCLUDED_COLLECTION_IDS = {"geofences"}
+            reports = sum(
+                1 for c in collections
+                if not c.get("id", "").startswith("layer_")
+                and c.get("id", "") not in EXCLUDED_COLLECTION_IDS
+            )
             data_layers = sum(1 for c in collections if c.get("id", "").startswith("layer_"))
             return {"reports": reports, "data_layers": data_layers}
         except Exception:
@@ -1152,41 +1174,45 @@ class OpenSppClient:
         self,
         geofence_type: str | None = None,
         active: bool = True,
-        count: int = 100,
+        limit: int = 100,
         offset: int = 0,
+        bbox: list | None = None,
     ) -> dict:
-        """List saved geofences.
+        """List geofences via OGC API - Features.
 
         Args:
             geofence_type: Filter by type
             active: Filter by active status
-            count: Page size
+            limit: Page size
             offset: Pagination offset
+            bbox: Spatial filter as [minx, miny, maxx, maxy]
 
         Returns:
-            List response with geofences and pagination
+            GeoJSON FeatureCollection with geofences
         """
-        params = [f"_count={count}", f"_offset={offset}"]
+        params = [f"limit={limit}", f"offset={offset}"]
         if geofence_type:
             params.append(f"geofence_type={geofence_type}")
         if not active:
             params.append("active=false")
+        if bbox:
+            params.append(f"bbox={','.join(str(v) for v in bbox)}")
 
         query_string = "&".join(params)
-        endpoint = f"/geofences?{query_string}"
+        endpoint = f"/ogc/collections/geofences/items?{query_string}"
 
         return self._sync_request(endpoint)
 
-    def get_geofence(self, geofence_id: int) -> dict:
+    def get_geofence(self, feature_id: str) -> dict:
         """Get single geofence as GeoJSON Feature.
 
         Args:
-            geofence_id: Geofence ID
+            feature_id: Geofence UUID
 
         Returns:
             GeoJSON Feature
         """
-        return self._sync_request(f"/geofences/{geofence_id}")
+        return self._sync_request(f"/ogc/collections/geofences/items/{feature_id}")
 
     def create_geofence(
         self,
@@ -1195,38 +1221,98 @@ class OpenSppClient:
         description: str | None = None,
         geofence_type: str = "custom",
         incident_code: str | None = None,
+        tags: list | None = None,
     ) -> dict:
-        """Create new geofence.
+        """Create new geofence via OGC API - Features Part 4.
 
         Args:
             name: Geofence name
-            geometry: GeoJSON geometry
+            geometry: GeoJSON geometry dict
             description: Optional description
             geofence_type: Type (hazard_zone, service_area, targeting_area, custom)
             incident_code: Related incident code
+            tags: Optional list of tag names
 
         Returns:
-            Created geofence response
+            Created GeoJSON Feature with server-generated fields
         """
-        data = {
+        properties = {
             "name": name,
-            "geometry": geometry,
             "geofence_type": geofence_type,
         }
         if description:
-            data["description"] = description
+            properties["description"] = description
         if incident_code:
-            data["incident_code"] = incident_code
+            properties["incident_code"] = incident_code
+        if tags:
+            properties["tags"] = tags
 
-        return self._sync_request("/geofences", method="POST", data=data)
+        data = {
+            "type": "Feature",
+            "geometry": geometry,
+            "properties": properties,
+        }
 
-    def delete_geofence(self, geofence_id: int) -> None:
-        """Archive (soft delete) geofence.
+        return self._sync_request(
+            "/ogc/collections/geofences/items", method="POST", data=data
+        )
+
+    def update_geofence(
+        self,
+        feature_id: str,
+        name: str,
+        geometry: dict,
+        description: str | None = None,
+        geofence_type: str = "custom",
+        incident_code: str | None = None,
+        tags: list | None = None,
+    ) -> dict:
+        """Replace geofence via OGC API - Features Part 4 (PUT).
 
         Args:
-            geofence_id: Geofence ID to archive
+            feature_id: Geofence UUID
+            name: Geofence name
+            geometry: GeoJSON geometry dict
+            description: Optional description
+            geofence_type: Type (hazard_zone, service_area, targeting_area, custom)
+            incident_code: Related incident code
+            tags: Optional list of tag names
+
+        Returns:
+            Updated GeoJSON Feature
         """
-        self._sync_request(f"/geofences/{geofence_id}", method="DELETE")
+        properties = {
+            "name": name,
+            "geofence_type": geofence_type,
+        }
+        if description:
+            properties["description"] = description
+        if incident_code:
+            properties["incident_code"] = incident_code
+        if tags:
+            properties["tags"] = tags
+
+        data = {
+            "type": "Feature",
+            "geometry": geometry,
+            "properties": properties,
+        }
+
+        return self._sync_request(
+            f"/ogc/collections/geofences/items/{feature_id}",
+            method="PUT",
+            data=data,
+        )
+
+    def delete_geofence(self, feature_id: str) -> None:
+        """Soft delete geofence via OGC API - Features Part 4.
+
+        Args:
+            feature_id: Geofence UUID
+        """
+        self._sync_request(
+            f"/ogc/collections/geofences/items/{feature_id}", method="DELETE"
+        )
 
     # === Export Endpoints ===
 
