@@ -5,10 +5,13 @@ Displays aggregated statistics from OpenSPP with collapsible category sections,
 a variable dropdown for map visualization, and per-shape result support.
 """
 
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDockWidget,
     QHBoxLayout,
     QLabel,
@@ -30,6 +33,8 @@ class StatsPanel(QDockWidget):
     - Per-shape results for thematic mapping
     """
 
+    disaggregation_requested = pyqtSignal(list)
+
     def __init__(self, iface, client, parent=None):
         """Initialize stats panel.
 
@@ -48,6 +53,7 @@ class StatsPanel(QDockWidget):
         self._feature_geometries = None
         self._variable_names = []
         self._viz_layer = None
+        self._last_query_params = None
 
         self._setup_ui()
 
@@ -93,6 +99,16 @@ class StatsPanel(QDockWidget):
         viz_layout.addWidget(self.apply_btn)
 
         layout.addLayout(viz_layout)
+
+        # Disaggregate button
+        self.disaggregate_btn = QPushButton("Disaggregate...")
+        self.disaggregate_btn.clicked.connect(self._on_disaggregate_clicked)
+        self.disaggregate_btn.setEnabled(False)
+        self.disaggregate_btn.setVisible(False)
+        layout.addWidget(self.disaggregate_btn)
+
+        # Check if dimensions are available and show button accordingly
+        self._update_disaggregate_button_visibility()
 
         # Action buttons
         button_layout = QHBoxLayout()
@@ -146,16 +162,20 @@ class StatsPanel(QDockWidget):
         self.apply_btn.setEnabled(False)
         self.copy_btn.setEnabled(True)
 
-    def show_batch_results(self, result, feature_geometries):
+    def show_batch_results(self, result, feature_geometries, query_params=None):
         """Display batch query results with per-shape data.
 
         Args:
             result: Batch result with 'results' and 'summary'
             feature_geometries: List of dicts with 'id' and 'geometry' (QgsGeometry)
+            query_params: Query parameters for re-query (optional)
         """
         self._current_result = result
         self._batch_results = result.get("results", [])
         self._feature_geometries = feature_geometries
+        if query_params is not None:
+            self._last_query_params = query_params
+            self.disaggregate_btn.setEnabled(True)
 
         # Update summary from batch summary
         summary = result.get("summary", {})
@@ -181,7 +201,7 @@ class StatsPanel(QDockWidget):
 
         self.copy_btn.setEnabled(True)
 
-    def show_proximity_results(self, result):
+    def show_proximity_results(self, result, query_params=None):
         """Display proximity query results.
 
         Proximity queries return a single aggregate result (not per-geometry),
@@ -190,10 +210,14 @@ class StatsPanel(QDockWidget):
 
         Args:
             result: Proximity query result from API
+            query_params: Query parameters for re-query (optional)
         """
         self._current_result = result
         self._batch_results = None
         self._feature_geometries = None
+        if query_params is not None:
+            self._last_query_params = query_params
+            self.disaggregate_btn.setEnabled(True)
 
         total_count = result.get("total_count", 0)
         query_method = result.get("query_method", "unknown")
@@ -638,6 +662,34 @@ class StatsPanel(QDockWidget):
             count = cell_data.get("count", 0)
             lines.append(f"{prefix}  {cell_label}: {self._format_value(count)}")
 
+    def _update_disaggregate_button_visibility(self):
+        """Show/hide the disaggregate button based on server capabilities."""
+        try:
+            dimensions = self.client.get_dimensions_from_process()
+            self.disaggregate_btn.setVisible(len(dimensions) > 0)
+        except Exception:
+            self.disaggregate_btn.setVisible(False)
+
+    def _on_disaggregate_clicked(self):
+        """Handle click on the Disaggregate button.
+
+        Opens a dimension picker dialog and emits the signal with
+        selected dimension names.
+        """
+        try:
+            dimensions = self.client.get_dimensions_from_process()
+        except Exception:
+            return
+
+        if not dimensions:
+            return
+
+        dialog = DimensionPickerDialog(dimensions, parent=self)
+        if dialog.exec_():
+            selected = dialog.selected_dimensions()
+            if selected:
+                self.disaggregation_requested.emit(selected)
+
     def clear(self):
         """Clear all displayed results."""
         self.summary_label.setText("No results yet")
@@ -650,7 +702,9 @@ class StatsPanel(QDockWidget):
         self._batch_results = None
         self._feature_geometries = None
         self._variable_names = []
+        self._last_query_params = None
         self.copy_btn.setEnabled(False)
+        self.disaggregate_btn.setEnabled(False)
 
         # Remove visualization layer if it exists
         if self._viz_layer is not None:
@@ -663,3 +717,51 @@ class StatsPanel(QDockWidget):
             except Exception:
                 pass
             self._viz_layer = None
+
+
+class DimensionPickerDialog(QDialog):
+    """Dialog for selecting disaggregation dimensions.
+
+    Presents checkboxes for each available dimension so the user
+    can select which ones to disaggregate by.
+    """
+
+    def __init__(self, dimensions, parent=None):
+        """Initialize dimension picker.
+
+        Args:
+            dimensions: List of dimension dicts [{"name": ..., "label": ...}]
+            parent: Parent widget
+        """
+        super().__init__(parent)
+        self.setWindowTitle("Select Dimensions")
+        self._dimensions = dimensions
+        self._checkboxes = []
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Select dimensions for disaggregation:"))
+
+        for dim in dimensions:
+            cb = QCheckBox(dim.get("label", dim["name"]))
+            cb.setChecked(True)
+            self._checkboxes.append(cb)
+            layout.addWidget(cb)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def selected_dimensions(self):
+        """Return list of selected dimension names.
+
+        Returns:
+            List of dimension name strings
+        """
+        selected = []
+        for i, cb in enumerate(self._checkboxes):
+            if cb.isChecked():
+                selected.append(self._dimensions[i]["name"])
+        return selected

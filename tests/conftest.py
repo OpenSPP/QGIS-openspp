@@ -10,6 +10,51 @@ from types import ModuleType
 from unittest.mock import MagicMock
 
 
+class _StubSignal:
+    """Stub for pyqtSignal that works as a class-level descriptor.
+
+    When accessed on a class, pyqtSignal is a descriptor that returns
+    a bound signal object on instances. This stub provides connect/emit
+    as no-ops.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self._callbacks = []
+
+    def __set_name__(self, owner, name):
+        self._name = name
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        # Return a per-instance signal proxy
+        attr_name = f"_signal_{self._name}"
+        if not hasattr(obj, attr_name):
+            proxy = _StubSignalProxy()
+            object.__setattr__(obj, attr_name, proxy)
+        return object.__getattribute__(obj, attr_name)
+
+
+class _StubSignalProxy:
+    """Per-instance signal proxy with connect/emit/disconnect."""
+
+    def __init__(self):
+        self._callbacks = []
+
+    def connect(self, callback):
+        self._callbacks.append(callback)
+
+    def disconnect(self, callback=None):
+        if callback:
+            self._callbacks = [c for c in self._callbacks if c is not callback]
+        else:
+            self._callbacks.clear()
+
+    def emit(self, *args):
+        for cb in self._callbacks:
+            cb(*args)
+
+
 class _StubClass:
     """Minimal stub class that can be subclassed (unlike MagicMock)."""
 
@@ -117,12 +162,15 @@ def _create_mock_qgis_modules():
     qtcore.QByteArray = MagicMock
     qtcore.QVariant = MagicMock()
     qtcore.QVariant.Double = 6
+    qtcore.pyqtSignal = _StubSignal
 
     # qgis.PyQt.QtWidgets - use _StubWidget for classes that are subclassed
     qtwidgets = ModuleType("qgis.PyQt.QtWidgets")
     qtwidgets.QDialog = _StubWidget
     qtwidgets.QDockWidget = _StubWidget
     qtwidgets.QWidget = _StubWidget
+    # QCheckBox needs to return distinct instances (used in DimensionPickerDialog)
+    qtwidgets.QCheckBox = lambda *a, **kw: MagicMock()
     # These are used as instances, not base classes - MagicMock is fine
     for widget_name in [
         "QDialogButtonBox",
@@ -132,7 +180,6 @@ def _create_mock_qgis_modules():
         "QLabel",
         "QLineEdit",
         "QPushButton",
-        "QCheckBox",
         "QMessageBox",
         "QAction",
         "QMenu",

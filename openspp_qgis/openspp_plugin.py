@@ -161,6 +161,9 @@ class OpenSppPlugin:
         """Initialize plugin GUI elements."""
         # Create menu
         self.menu = QMenu(self.tr("&OpenSPP"))
+        self.menu.setIcon(
+            QIcon(os.path.join(self.plugin_dir, "icons", "openspp.png"))
+        )
         self.iface.pluginMenu().addMenu(self.menu)
 
         # Create toolbar
@@ -881,13 +884,27 @@ class OpenSppPlugin:
                     self.client,
                     parent=self.iface.mainWindow(),
                 )
+                self.stats_panel.disaggregation_requested.connect(
+                    self._on_disaggregation_requested
+                )
                 self.iface.addDockWidget(
                     Qt.RightDockWidgetArea,
                     self.stats_panel,
                 )
 
+            # Build query params for potential re-query
+            query_params = {
+                "query_type": "spatial_batch",
+                "geometries": geometries,
+                "feature_geometries": feature_geometries,
+                "filters": None,
+                "variables": None,
+            }
+
             # Pass both batch results and original geometries for visualization
-            self.stats_panel.show_batch_results(result, feature_geometries)
+            self.stats_panel.show_batch_results(
+                result, feature_geometries, query_params=query_params
+            )
             self.stats_panel.show()
 
             self.iface.messageBar().pushSuccess(
@@ -991,12 +1008,27 @@ class OpenSppPlugin:
                     self.client,
                     parent=self.iface.mainWindow(),
                 )
+                self.stats_panel.disaggregation_requested.connect(
+                    self._on_disaggregation_requested
+                )
                 self.iface.addDockWidget(
                     Qt.RightDockWidgetArea,
                     self.stats_panel,
                 )
 
-            self.stats_panel.show_proximity_results(result)
+            # Build query params for potential re-query
+            query_params = {
+                "query_type": "proximity",
+                "reference_points": reference_points,
+                "radius_km": dialog.radius_km,
+                "relation": dialog.relation,
+                "filters": None,
+                "variables": None,
+            }
+
+            self.stats_panel.show_proximity_results(
+                result, query_params=query_params
+            )
             self.stats_panel.show()
 
             self.iface.messageBar().pushSuccess(
@@ -1019,6 +1051,79 @@ class OpenSppPlugin:
             self.iface.messageBar().pushCritical(
                 self.tr("OpenSPP"),
                 self.tr("Proximity query failed. Please check your connection and try again."),
+            )
+
+    def _on_disaggregation_requested(self, dimensions):
+        """Handle disaggregation re-query request from the stats panel.
+
+        Reads _last_query_params from the stats panel, dispatches to
+        the correct client method with group_by, and updates the panel
+        with enriched results.
+
+        Args:
+            dimensions: List of dimension name strings
+        """
+        if not self.stats_panel or not self.stats_panel._last_query_params:
+            return
+
+        params = self.stats_panel._last_query_params
+
+        try:
+            msg_text = self.tr("Disaggregating results...")
+            msg_bar, progress_bar, cancel_btn, cancelled = (
+                self._create_progress_widget(msg_text)
+            )
+            on_progress = self._make_progress_callback(
+                progress_bar, cancelled
+            )
+
+            if params["query_type"] == "spatial_batch":
+                result = self.client.query_statistics_batch(
+                    geometries=params["geometries"],
+                    filters=params.get("filters"),
+                    variables=params.get("variables"),
+                    group_by=dimensions,
+                    on_progress=on_progress,
+                )
+
+                self.iface.messageBar().popWidget(msg_bar)
+
+                self.stats_panel.show_batch_results(
+                    result,
+                    params["feature_geometries"],
+                    query_params=params,
+                )
+
+            elif params["query_type"] == "proximity":
+                result = self.client.query_proximity(
+                    reference_points=params["reference_points"],
+                    radius_km=params["radius_km"],
+                    relation=params["relation"],
+                    filters=params.get("filters"),
+                    variables=params.get("variables"),
+                    group_by=dimensions,
+                    on_progress=on_progress,
+                )
+
+                self.iface.messageBar().popWidget(msg_bar)
+
+                self.stats_panel.show_proximity_results(
+                    result, query_params=params
+                )
+
+            self.iface.messageBar().pushSuccess(
+                self.tr("OpenSPP"),
+                self.tr("Disaggregation completed"),
+            )
+
+        except Exception as e:
+            self.log(f"Error in disaggregation: {e}", Qgis.Critical)
+            self.iface.messageBar().pushCritical(
+                self.tr("OpenSPP"),
+                self.tr(
+                    "Disaggregation failed. Please check your "
+                    "connection and try again."
+                ),
             )
 
     def show_geofence_dialog(self):

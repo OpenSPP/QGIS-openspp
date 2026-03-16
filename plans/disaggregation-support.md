@@ -475,29 +475,29 @@ calls.
 
 ### Phase D: Stats panel re-query with disaggregation
 
-- [ ] Write test: `show_batch_results()` stores `_last_query_params` with `query_type: "spatial_batch"`
-- [ ] Write test: `show_proximity_results()` stores `_last_query_params` with `query_type: "proximity"`
-- [ ] Write test: `show_batch_results()` without `query_params` arg still works (backward compat)
-- [ ] Write test: `show_results()` does not set `_last_query_params` (not re-queryable)
-- [ ] Write test: `clear()` resets `_last_query_params` to None
-- [ ] Write test: "Disaggregate..." button is hidden when dimension list is empty (older server)
-- [ ] Write test: "Disaggregate..." button is disabled when `_last_query_params` is None
-- [ ] Write test: dimension picker dialog populates checkboxes from `get_dimensions_from_process()`
-- [ ] Write test: `disaggregation_requested` signal emits selected dimension names
-- [ ] Write test: plugin handler dispatches spatial batch re-query with group_by and progress widget
-- [ ] Write test: plugin handler dispatches proximity re-query with group_by and progress widget
-- [ ] Add `disaggregation_requested = pyqtSignal(list)` to `StatsPanel`
-- [ ] Update `show_batch_results()` signature to accept `query_params`; store as `_last_query_params`
-- [ ] Update `show_proximity_results()` signature to accept `query_params`; store as `_last_query_params`
-- [ ] Update `clear()` to reset `_last_query_params` to None and disable "Disaggregate..." button
-- [ ] Add "Disaggregate..." button to stats panel UI (hidden by default)
-- [ ] Show/hide button based on `get_dimensions_from_process()` result
-- [ ] Enable/disable button based on `_last_query_params` being set
-- [ ] Implement dimension picker dialog (checkboxes from `get_dimensions_from_process()`)
-- [ ] Wire button click: open dialog, emit signal with selected dimensions
-- [ ] Connect signal in plugin class; implement handler with progress/cancel and dispatch
-- [ ] Update `openspp_plugin.py` call sites to pass `query_params` to `show_*()` methods
-- [ ] Commit
+- [x] Write test: `show_batch_results()` stores `_last_query_params` with `query_type: "spatial_batch"`
+- [x] Write test: `show_proximity_results()` stores `_last_query_params` with `query_type: "proximity"`
+- [x] Write test: `show_batch_results()` without `query_params` arg still works (backward compat)
+- [x] Write test: `show_results()` does not set `_last_query_params` (not re-queryable)
+- [x] Write test: `clear()` resets `_last_query_params` to None
+- [x] Write test: "Disaggregate..." button is hidden when dimension list is empty (older server)
+- [x] Write test: "Disaggregate..." button is disabled when `_last_query_params` is None
+- [x] Write test: dimension picker dialog populates checkboxes from `get_dimensions_from_process()`
+- [x] Write test: `disaggregation_requested` signal emits selected dimension names
+- [x] Write test: plugin handler dispatches spatial batch re-query with group_by and progress widget
+- [x] Write test: plugin handler dispatches proximity re-query with group_by and progress widget
+- [x] Add `disaggregation_requested = pyqtSignal(list)` to `StatsPanel`
+- [x] Update `show_batch_results()` signature to accept `query_params`; store as `_last_query_params`
+- [x] Update `show_proximity_results()` signature to accept `query_params`; store as `_last_query_params`
+- [x] Update `clear()` to reset `_last_query_params` to None and disable "Disaggregate..." button
+- [x] Add "Disaggregate..." button to stats panel UI (hidden by default)
+- [x] Show/hide button based on `get_dimensions_from_process()` result
+- [x] Enable/disable button based on `_last_query_params` being set
+- [x] Implement dimension picker dialog (checkboxes from `get_dimensions_from_process()`)
+- [x] Wire button click: open dialog, emit signal with selected dimensions
+- [x] Connect signal in plugin class; implement handler with progress/cancel and dispatch
+- [x] Update `openspp_plugin.py` call sites to pass `query_params` to `show_*()` methods
+- [x] Commit
 
 ### Phase E: Visualization with breakdown
 
