@@ -418,6 +418,24 @@ class StatsPanel(QDockWidget):
                     self._variable_names.append(key)
                     self.variable_combo.addItem(self._format_key(key), key)
 
+        # Add breakdown fields from batch results (union of all results)
+        if self._batch_results:
+            from ..processing.utils import sanitize_breakdown_field_name
+
+            breakdown_field_set = set()
+            for res in self._batch_results:
+                breakdown = res.get("breakdown")
+                if not breakdown:
+                    continue
+                for cell_data in breakdown.values():
+                    labels = cell_data.get("labels", {})
+                    field_name = sanitize_breakdown_field_name(labels)
+                    breakdown_field_set.add(field_name)
+            for field_name in sorted(breakdown_field_set):
+                if field_name not in self._variable_names:
+                    self._variable_names.append(field_name)
+                    self.variable_combo.addItem(field_name, field_name)
+
         has_variables = len(self._variable_names) > 0
         has_batch = self._batch_results is not None and len(self._batch_results) > 0
         self.variable_combo.setEnabled(has_variables and has_batch)
@@ -491,15 +509,29 @@ class StatsPanel(QDockWidget):
                 feature.setGeometry(geometry)
 
                 statistics = result.get("statistics", {})
+
+                # Build breakdown lookup for this result
+                from ..processing.utils import sanitize_breakdown_field_name
+                bd_values = {}
+                breakdown = result.get("breakdown") or {}
+                for cell_data in breakdown.values():
+                    labels = cell_data.get("labels", {})
+                    fname = sanitize_breakdown_field_name(labels)
+                    bd_values[fname] = cell_data.get("count", 0)
+
                 attrs = []
                 for key in stat_keys:
-                    value = statistics.get(key)
-                    if isinstance(value, int | float):
-                        attrs.append(float(value))
+                    # Check statistics first, then breakdown values
+                    if key in bd_values:
+                        val = bd_values[key]
+                        attrs.append(float(val) if val is not None else 0.0)
                     else:
-                        # Suppressed or missing values default to 0.0
-                        # so every shape gets classified by the renderer
-                        attrs.append(0.0)
+                        value = statistics.get(key)
+                        if isinstance(value, int | float):
+                            attrs.append(float(value))
+                        else:
+                            # Suppressed or missing values default to 0.0
+                            attrs.append(0.0)
 
                 feature.setAttributes(attrs)
                 provider.addFeature(feature)

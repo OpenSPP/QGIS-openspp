@@ -501,12 +501,12 @@ calls.
 
 ### Phase E: Visualization with breakdown
 
-- [ ] Write test: variable combo includes breakdown fields when breakdown present in batch results
-- [ ] Write test: visualization layer includes breakdown columns as attributes (union of all results)
-- [ ] Write test: visualization layer populates breakdown values; missing cells default to 0.0
-- [ ] Update `_populate_variable_combo()` to include breakdown fields from batch results
-- [ ] Update `_apply_visualization()` to add breakdown columns and values (union-based discovery)
-- [ ] Commit
+- [x] Write test: variable combo includes breakdown fields when breakdown present in batch results
+- [x] Write test: visualization layer includes breakdown columns as attributes (union of all results)
+- [x] Write test: visualization layer populates breakdown values; missing cells default to 0.0
+- [x] Update `_populate_variable_combo()` to include breakdown fields from batch results
+- [x] Update `_apply_visualization()` to add breakdown columns and values (union-based discovery)
+- [x] Commit
 
 ### Phase F: Verify
 

@@ -191,3 +191,164 @@ class TestVisualizationVariableCombo:
         panel._populate_variable_combo(statistics)
 
         assert len(panel._variable_names) == 0
+
+
+class TestVisualizationBreakdown:
+    """Test visualization with breakdown fields."""
+
+    def test_variable_combo_includes_breakdown_fields(self):
+        """Test that variable combo includes breakdown fields from batch results."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+
+        batch_result = {
+            "results": [
+                {
+                    "id": "zone_1",
+                    "total_count": 100,
+                    "statistics": {"count": 100},
+                    "breakdown": {
+                        "male": {
+                            "count": 60,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "1", "display": "Male"},
+                            },
+                        },
+                        "female": {
+                            "count": 40,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "2", "display": "Female"},
+                            },
+                        },
+                    },
+                },
+            ],
+            "summary": {
+                "total_count": 100,
+                "geometries_queried": 1,
+                "statistics": {"count": 100},
+                "breakdown": {
+                    "male": {
+                        "count": 60,
+                        "statistics": {},
+                        "labels": {
+                            "gender": {"value": "1", "display": "Male"},
+                        },
+                    },
+                    "female": {
+                        "count": 40,
+                        "statistics": {},
+                        "labels": {
+                            "gender": {"value": "2", "display": "Female"},
+                        },
+                    },
+                },
+            },
+        }
+        geometries = [{"id": "zone_1", "geometry": MagicMock()}]
+        panel.show_batch_results(batch_result, geometries)
+
+        # Variable names should include breakdown fields
+        assert "disagg_Female" in panel._variable_names
+        assert "disagg_Male" in panel._variable_names
+
+    def test_visualization_includes_breakdown_columns(self):
+        """Test that visualization layer includes breakdown columns."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+
+        batch_result = {
+            "results": [
+                {
+                    "id": "zone_1",
+                    "total_count": 100,
+                    "statistics": {"count": 100},
+                    "breakdown": {
+                        "male": {
+                            "count": 60,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "1", "display": "Male"},
+                            },
+                        },
+                    },
+                },
+                {
+                    "id": "zone_2",
+                    "total_count": 50,
+                    "statistics": {"count": 50},
+                    "breakdown": {
+                        "male": {
+                            "count": 30,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "1", "display": "Male"},
+                            },
+                        },
+                        "female": {
+                            "count": 20,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "2", "display": "Female"},
+                            },
+                        },
+                    },
+                },
+            ],
+            "summary": {
+                "total_count": 150,
+                "geometries_queried": 2,
+                "statistics": {"count": 150},
+            },
+        }
+        geometries = [
+            {"id": "zone_1", "geometry": MagicMock()},
+            {"id": "zone_2", "geometry": MagicMock()},
+        ]
+        panel.show_batch_results(batch_result, geometries)
+
+        # Variable names should include union of breakdown fields
+        assert "disagg_Female" in panel._variable_names
+        assert "disagg_Male" in panel._variable_names
+
+    def test_visualization_missing_breakdown_cells_default_zero(self):
+        """Test that missing breakdown cells default to 0.0 in visualization."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+
+        batch_result = {
+            "results": [
+                {
+                    "id": "zone_1",
+                    "total_count": 100,
+                    "statistics": {"count": 100},
+                    "breakdown": {
+                        "male": {
+                            "count": 100,
+                            "statistics": {},
+                            "labels": {
+                                "gender": {"value": "1", "display": "Male"},
+                            },
+                        },
+                    },
+                },
+                {
+                    "id": "zone_2",
+                    "total_count": 50,
+                    "statistics": {"count": 50},
+                    "breakdown": {},
+                },
+            ],
+            "summary": {
+                "total_count": 150,
+                "geometries_queried": 2,
+                "statistics": {"count": 150},
+            },
+        }
+        geometries = [
+            {"id": "zone_1", "geometry": MagicMock()},
+            {"id": "zone_2", "geometry": MagicMock()},
+        ]
+        panel.show_batch_results(batch_result, geometries)
+
+        # Should still discover breakdown fields from zone_1
+        assert "disagg_Male" in panel._variable_names
