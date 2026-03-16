@@ -28,10 +28,8 @@ from qgis.core import (
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingUtils,
-    QgsProject,
     QgsStyle,
     QgsSymbol,
-    QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QVariant
 
@@ -316,11 +314,11 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         return {self.OUTPUT: dest_id}
 
     def postProcessAlgorithm(self, context, feedback):
-        """Apply graduated choropleth renderers to the output layer(s).
+        """Apply graduated choropleth renderers to the output layer.
 
-        When breakdown columns exist, creates one additional layer per
-        breakdown value (e.g. "Male", "Female"), each with its own
-        graduated renderer. All layers are added to a layer group.
+        When breakdown columns exist, adds a named style per breakdown
+        value (e.g. "Male", "Female"). The user can switch styles via
+        right-click -> Styles, or the Layer Styling panel (F7).
         """
         if not self._dest_id:
             return {self.OUTPUT: self._dest_id}
@@ -328,6 +326,9 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         # Set the layer name via load-on-completion details
         classify_field = self._classify_field
         layer_name = f"OpenSPP - {classify_field}"
+        if self._breakdown_layer_info and self._selected_dimension_labels:
+            dims_str = " x ".join(self._selected_dimension_labels)
+            layer_name = f"OpenSPP - {classify_field} ({dims_str})"
         if self._dest_id in context.layersToLoadOnCompletion():
             details = context.layerToLoadOnCompletionDetails(self._dest_id)
             details.name = layer_name
@@ -344,12 +345,12 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         if layer.fields().indexOf(classify_field) < 0:
             return {self.OUTPUT: self._dest_id}
 
-        # Apply graduated renderer to the main layer
+        # Apply graduated renderer for the main variable
         self._apply_graduated_renderer(layer, classify_field)
 
-        # Create per-breakdown layers if breakdown data exists
+        # Add named styles for each breakdown column
         if self._breakdown_layer_info:
-            self._create_breakdown_layers(layer, context, feedback)
+            self._add_breakdown_styles(layer, feedback)
 
         return {self.OUTPUT: self._dest_id}
 
@@ -385,65 +386,35 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         layer.setRenderer(renderer)
         layer.triggerRepaint()
 
-    def _create_breakdown_layers(self, source_layer, context, feedback):
-        """Create one layer per breakdown column with graduated rendering."""
-        project = QgsProject.instance()
-        root = project.layerTreeRoot()
+    def _add_breakdown_styles(self, layer, feedback):
+        """Add named styles for each breakdown column.
 
-        # Create a layer group named after the selected dimensions
-        if self._selected_dimension_labels:
-            dims_str = " x ".join(self._selected_dimension_labels)
-            group_name = f"OpenSPP - {dims_str}"
-        else:
-            group_name = "OpenSPP - Disaggregation"
-        group = root.insertGroup(0, group_name)
+        Each style uses a graduated renderer on its breakdown field.
+        The user switches styles via right-click -> Styles or the
+        Layer Styling panel (F7).
+        """
+        style_mgr = layer.styleManager()
+
+        # Rename the default style to the main variable name
+        style_mgr.renameStyle("", self._classify_field)
 
         for field_name in sorted(self._breakdown_layer_info.keys()):
             display_label = self._breakdown_layer_info[field_name]
 
-            # Create a memory layer with the same CRS and geometry type
-            crs = source_layer.crs().authid()
-            geom_type = source_layer.geometryType()
-            type_str = {0: "Point", 1: "LineString", 2: "Polygon"}.get(geom_type, "Polygon")
-            uri = f"{type_str}?crs={crs}"
-            bd_layer = QgsVectorLayer(uri, display_label, "memory")
-            if not bd_layer.isValid():
+            if layer.fields().indexOf(field_name) < 0:
                 continue
 
-            # Add fields: id, total_count, and the breakdown field
-            dp = bd_layer.dataProvider()
-            dp.addAttributes([
-                QgsField("id", QVariant.Double),
-                QgsField("total_count", QVariant.Double),
-                QgsField(field_name, QVariant.Double),
-            ])
-            bd_layer.updateFields()
+            # Apply the breakdown renderer, save as a named style, then restore
+            self._apply_graduated_renderer(layer, field_name)
+            style_mgr.addStyleFromLayer(display_label)
 
-            # Copy features with only the relevant attributes
-            field_idx = source_layer.fields().indexOf(field_name)
-            id_idx = source_layer.fields().indexOf("id")
-            tc_idx = source_layer.fields().indexOf("total_count")
-            if field_idx < 0:
-                continue
+        # Switch back to the main variable style
+        style_mgr.setCurrentStyle(self._classify_field)
 
-            features = []
-            for src_feat in source_layer.getFeatures():
-                feat = QgsFeature(bd_layer.fields())
-                feat.setGeometry(src_feat.geometry())
-                feat.setAttributes([
-                    src_feat.attributes()[id_idx] if id_idx >= 0 else 0.0,
-                    src_feat.attributes()[tc_idx] if tc_idx >= 0 else 0.0,
-                    src_feat.attributes()[field_idx],
-                ])
-                features.append(feat)
-            dp.addFeatures(features)
-
-            # Apply graduated renderer on the breakdown field
-            self._apply_graduated_renderer(bd_layer, field_name)
-
-            # Add to project inside the group
-            project.addMapLayer(bd_layer, False)
-            group.addLayer(bd_layer)
+        feedback.pushInfo(
+            f"Added {len(self._breakdown_layer_info)} breakdown styles. "
+            "Tip: right-click layer \u2192 Styles to switch views."
+        )
 
     def _get_variable_options(self):
         """Fetch variable names from the server for the enum dropdown."""
