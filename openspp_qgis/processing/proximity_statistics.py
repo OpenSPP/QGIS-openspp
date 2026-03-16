@@ -107,7 +107,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
                 self.RELATION,
                 "Relation",
                 options=RELATION_OPTIONS,
-                defaultValue=1,  # "beyond"
+                defaultValue=0,  # "within"
             )
         )
 

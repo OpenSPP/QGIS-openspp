@@ -28,8 +28,10 @@ from qgis.core import (
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
     QgsProcessingUtils,
+    QgsProject,
     QgsStyle,
     QgsSymbol,
+    QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QVariant
 
@@ -54,6 +56,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         self._dimension_names = []
         self._classify_field = "total_count"
         self._dest_id = None
+        self._breakdown_layer_info = {}  # {field_name: display_label}
 
     def name(self):
         return "spatial_statistics"
@@ -81,6 +84,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         instance._client = self._client
         instance._variable_names = self._variable_names
         instance._dimension_names = self._dimension_names
+        instance._breakdown_layer_info = self._breakdown_layer_info
         return instance
 
     def initAlgorithm(self, config):
@@ -230,6 +234,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
 
         # Collect union of breakdown keys across all results
         breakdown_columns = {}  # {field_name: cell_key}
+        breakdown_display = {}  # {field_name: display_label}
         for res in results_list:
             breakdown = res.get("breakdown")
             if not breakdown:
@@ -239,7 +244,11 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 field_name = sanitize_breakdown_field_name(labels)
                 if field_name not in breakdown_columns:
                     breakdown_columns[field_name] = cell_key
+                    # Build human-readable label from dimension display values
+                    display_parts = [labels[dim]["display"] for dim in sorted(labels)]
+                    breakdown_display[field_name] = " / ".join(display_parts)
         breakdown_field_names = sorted(breakdown_columns.keys())
+        self._breakdown_layer_info = breakdown_display
         for field_name in breakdown_field_names:
             fields.append(QgsField(field_name, QVariant.Double))
 
@@ -289,7 +298,12 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         return {self.OUTPUT: dest_id}
 
     def postProcessAlgorithm(self, context, feedback):
-        """Apply a graduated choropleth renderer to the output layer."""
+        """Apply graduated choropleth renderers to the output layer(s).
+
+        When breakdown columns exist, creates one additional layer per
+        breakdown value (e.g. "Male", "Female"), each with its own
+        graduated renderer. All layers are added to a layer group.
+        """
         if not self._dest_id:
             return {self.OUTPUT: self._dest_id}
 
@@ -300,9 +314,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             details = context.layerToLoadOnCompletionDetails(self._dest_id)
             details.name = layer_name
 
-        # Find the layer for renderer setup.
-        # For memory layers the id lives in the temporary store; for
-        # file-backed outputs (GeoPackage, etc.) we need to load from path.
+        # Find the layer for renderer setup
         layer = context.getMapLayer(self._dest_id)
         if layer is None:
             layer = context.temporaryLayerStore().mapLayer(self._dest_id)
@@ -314,12 +326,24 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         if layer.fields().indexOf(classify_field) < 0:
             return {self.OUTPUT: self._dest_id}
 
-        # Set up a graduated renderer with a default polygon symbol
+        # Apply graduated renderer to the main layer
+        self._apply_graduated_renderer(layer, classify_field)
+
+        # Create per-breakdown layers if breakdown data exists
+        if self._breakdown_layer_info:
+            self._create_breakdown_layers(layer, context, feedback)
+
+        return {self.OUTPUT: self._dest_id}
+
+    def _apply_graduated_renderer(self, layer, field_name):
+        """Apply a graduated choropleth renderer to a layer."""
+        if layer.fields().indexOf(field_name) < 0:
+            return
+
         symbol = QgsSymbol.defaultSymbol(layer.geometryType())
-        renderer = QgsGraduatedSymbolRenderer(classify_field, [])
+        renderer = QgsGraduatedSymbolRenderer(field_name, [])
         renderer.setSourceSymbol(symbol)
 
-        # Use a built-in color ramp
         style = QgsStyle.defaultStyle()
         ramp = style.colorRamp("YlOrRd")
         if ramp is None:
@@ -330,8 +354,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         renderer.updateClasses(layer, renderer.Jenks, 5)
 
         # Jenks can produce duplicate zero ranges (e.g. two "0 - 0" classes)
-        # when many features have a value of 0.  Remove the extras and
-        # extend the first non-zero range down to 0.
+        # when many features have a value of 0. Remove the extras.
         ranges = renderer.ranges()
         to_delete = []
         for i in range(len(ranges) - 1, 0, -1):
@@ -344,7 +367,61 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         layer.setRenderer(renderer)
         layer.triggerRepaint()
 
-        return {self.OUTPUT: self._dest_id}
+    def _create_breakdown_layers(self, source_layer, context, feedback):
+        """Create one layer per breakdown column with graduated rendering."""
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+
+        # Create a layer group for the breakdown layers
+        group_name = "OpenSPP - Disaggregation"
+        group = root.insertGroup(0, group_name)
+
+        for field_name in sorted(self._breakdown_layer_info.keys()):
+            display_label = self._breakdown_layer_info[field_name]
+
+            # Create a memory layer with the same CRS and geometry type
+            crs = source_layer.crs().authid()
+            geom_type = source_layer.geometryType()
+            type_str = {0: "Point", 1: "LineString", 2: "Polygon"}.get(geom_type, "Polygon")
+            uri = f"{type_str}?crs={crs}"
+            bd_layer = QgsVectorLayer(uri, display_label, "memory")
+            if not bd_layer.isValid():
+                continue
+
+            # Add fields: id, total_count, and the breakdown field
+            dp = bd_layer.dataProvider()
+            dp.addAttributes([
+                QgsField("id", QVariant.Double),
+                QgsField("total_count", QVariant.Double),
+                QgsField(field_name, QVariant.Double),
+            ])
+            bd_layer.updateFields()
+
+            # Copy features with only the relevant attributes
+            field_idx = source_layer.fields().indexOf(field_name)
+            id_idx = source_layer.fields().indexOf("id")
+            tc_idx = source_layer.fields().indexOf("total_count")
+            if field_idx < 0:
+                continue
+
+            features = []
+            for src_feat in source_layer.getFeatures():
+                feat = QgsFeature(bd_layer.fields())
+                feat.setGeometry(src_feat.geometry())
+                feat.setAttributes([
+                    src_feat.attributes()[id_idx] if id_idx >= 0 else 0.0,
+                    src_feat.attributes()[tc_idx] if tc_idx >= 0 else 0.0,
+                    src_feat.attributes()[field_idx],
+                ])
+                features.append(feat)
+            dp.addFeatures(features)
+
+            # Apply graduated renderer on the breakdown field
+            self._apply_graduated_renderer(bd_layer, field_name)
+
+            # Add to project inside the group
+            project.addMapLayer(bd_layer, False)
+            group.addLayer(bd_layer)
 
     def _get_variable_options(self):
         """Fetch variable names from the server for the enum dropdown."""

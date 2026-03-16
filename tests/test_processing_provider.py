@@ -417,6 +417,109 @@ class TestSpatialStatisticsAlgorithm:
         assert sink.addFeature.call_count == 2
 
 
+    def test_breakdown_info_stored_for_post_processing(self):
+        """Test that breakdown display labels are stored for layer creation."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 100,
+            "statistics": {},
+            "breakdown": {
+                "1": {
+                    "count": 60,
+                    "statistics": {},
+                    "labels": {
+                        "gender": {"value": "1", "display": "Male"},
+                    },
+                },
+                "2": {
+                    "count": 40,
+                    "statistics": {},
+                    "labels": {
+                        "gender": {"value": "2", "display": "Female"},
+                    },
+                },
+            },
+        }
+
+        features = [_make_mock_feature(fid=0)]
+        alg, sink = _setup_spatial_alg(features, mock_client)
+        alg._dimension_names = ["gender"]
+        alg.parameterAsEnums = MagicMock(return_value=[0])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        # _breakdown_layer_info should map field_name -> display label
+        assert hasattr(alg, "_breakdown_layer_info")
+        assert "disagg_Female" in alg._breakdown_layer_info
+        assert "disagg_Male" in alg._breakdown_layer_info
+        assert alg._breakdown_layer_info["disagg_Male"] == "Male"
+        assert alg._breakdown_layer_info["disagg_Female"] == "Female"
+
+    def test_no_breakdown_info_without_group_by(self):
+        """Test that _breakdown_layer_info is empty without group_by."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 42,
+            "statistics": {"count": 42},
+        }
+
+        feature = _make_mock_feature(fid=1)
+        alg, sink = _setup_spatial_alg([feature], mock_client)
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        assert alg._breakdown_layer_info == {}
+
+    def test_breakdown_info_multi_dimension_labels(self):
+        """Test display labels for multi-dimension breakdown."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 100,
+            "statistics": {},
+            "breakdown": {
+                "1|adult": {
+                    "count": 50,
+                    "statistics": {},
+                    "labels": {
+                        "gender": {"value": "1", "display": "Male"},
+                        "age_group": {"value": "adult", "display": "Adult (18-59)"},
+                    },
+                },
+                "2|child": {
+                    "count": 30,
+                    "statistics": {},
+                    "labels": {
+                        "gender": {"value": "2", "display": "Female"},
+                        "age_group": {"value": "child", "display": "Child (0-17)"},
+                    },
+                },
+            },
+        }
+
+        feature = _make_mock_feature(fid=1)
+        alg, sink = _setup_spatial_alg([feature], mock_client)
+        alg._dimension_names = ["gender", "age_group"]
+        alg.parameterAsEnums = MagicMock(return_value=[0, 1])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        # Multi-dimension labels should be joined with " / "
+        info = alg._breakdown_layer_info
+        assert "disagg_Adult_1859_Male" in info
+        assert info["disagg_Adult_1859_Male"] == "Adult (18-59) / Male"
+        assert "disagg_Child_017_Female" in info
+        assert info["disagg_Child_017_Female"] == "Child (0-17) / Female"
+
+
 class TestProximityStatisticsAlgorithm:
     """Test ProximityStatisticsAlgorithm parameter definitions and execution."""
 
