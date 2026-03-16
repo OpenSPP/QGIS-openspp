@@ -34,6 +34,21 @@ from .utils import fetch_dimension_options, fetch_variable_options, sanitize_bre
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_float(val):
+    """Convert a value to float, returning 0.0 for non-numeric values.
+
+    Handles suppressed statistics (e.g. '<5') that the server returns
+    as strings instead of numbers.
+    """
+    if val is None:
+        return 0.0
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 RELATION_OPTIONS = ["within", "beyond"]
 
 
@@ -260,10 +275,10 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         ]
         for key in stat_keys:
             val = stats.get(key, 0)
-            attrs.append(float(val) if val is not None else 0.0)
+            attrs.append(_safe_float(val))
         for field_name in breakdown_field_names:
             val = bd_values.get(field_name, 0)
-            attrs.append(float(val) if val is not None else 0.0)
+            attrs.append(_safe_float(val))
         feat.setAttributes(attrs)
         sink.addFeature(feat)
         del sink

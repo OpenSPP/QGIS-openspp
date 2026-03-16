@@ -40,6 +40,20 @@ from .utils import fetch_dimension_options, fetch_variable_options, sanitize_bre
 logger = logging.getLogger(__name__)
 
 
+def _safe_float(val):
+    """Convert a value to float, returning 0.0 for non-numeric values.
+
+    Handles suppressed statistics (e.g. '<5') that the server returns
+    as strings instead of numbers.
+    """
+    if val is None:
+        return 0.0
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
     """Query registrant statistics for polygon features via OpenSPP."""
 
@@ -278,7 +292,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
             ]
             for key in stat_keys:
                 val = res.get("statistics", {}).get(key, 0)
-                attrs.append(float(val) if val is not None else 0.0)
+                attrs.append(_safe_float(val))
 
             # Add breakdown values (missing cells default to 0.0)
             breakdown = res.get("breakdown") or {}
@@ -290,7 +304,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 bd_values[field_name] = cell_data.get("count", 0)
             for field_name in breakdown_field_names:
                 val = bd_values.get(field_name, 0)
-                attrs.append(float(val) if val is not None else 0.0)
+                attrs.append(_safe_float(val))
 
             feat.setAttributes(attrs)
             sink.addFeature(feat)
