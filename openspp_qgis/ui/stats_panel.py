@@ -135,6 +135,9 @@ class StatsPanel(QDockWidget):
         statistics = result.get("statistics", {})
         self._populate_stats_tree(statistics)
 
+        # Populate breakdown tree if present
+        self._populate_breakdown_tree(result.get("breakdown"))
+
         # Update details
         self.details_label.setText("<i>Statistics computed in OpenSPP using PostGIS spatial queries</i>")
 
@@ -166,6 +169,9 @@ class StatsPanel(QDockWidget):
         # Populate statistics tree from summary statistics
         statistics = summary.get("statistics", {})
         self._populate_stats_tree(statistics)
+
+        # Populate breakdown tree if present in summary
+        self._populate_breakdown_tree(summary.get("breakdown"))
 
         # Populate variable dropdown for visualization
         self._populate_variable_combo(statistics)
@@ -207,6 +213,9 @@ class StatsPanel(QDockWidget):
 
         statistics = result.get("statistics", {})
         self._populate_stats_tree(statistics)
+
+        # Populate breakdown tree if present
+        self._populate_breakdown_tree(result.get("breakdown"))
 
         self.details_label.setText(
             f"<i>Registrants {relation} {radius_km} km of " f"{reference_points_count} reference point(s)</i>"
@@ -293,6 +302,58 @@ class StatsPanel(QDockWidget):
                 item = QTreeWidgetItem(self.stats_tree)
                 item.setText(0, self._format_key(key))
                 item.setText(1, self._format_value(value))
+
+    def _populate_breakdown_tree(self, breakdown):
+        """Populate the breakdown section of the stats tree.
+
+        Adds a bold "Breakdown" top-level node with one child per breakdown
+        cell. Each cell shows its label (from dimension display values) and
+        count as a child item.
+
+        Args:
+            breakdown: Breakdown dict from API response, or None
+        """
+        if not breakdown:
+            return
+
+        breakdown_item = QTreeWidgetItem(self.stats_tree)
+        breakdown_item.setText(0, "Breakdown")
+        breakdown_item.setExpanded(True)
+        font = breakdown_item.font(0)
+        font.setBold(True)
+        breakdown_item.setFont(0, font)
+
+        for _cell_key, cell_data in breakdown.items():
+            labels = cell_data.get("labels", {})
+            label_parts = [
+                labels[dim]["display"] for dim in sorted(labels)
+            ]
+            cell_label = ", ".join(label_parts)
+
+            cell_item = QTreeWidgetItem(breakdown_item)
+            cell_item.setText(0, cell_label)
+
+            # Add count as child
+            count = cell_data.get("count")
+            if count is not None:
+                count_item = QTreeWidgetItem(cell_item)
+                count_item.setText(0, "Count")
+                count_item.setText(1, self._format_value(count))
+
+            # Add any statistics entries
+            statistics = cell_data.get("statistics", {})
+            for stat_key, stat_value in statistics.items():
+                if isinstance(stat_value, dict):
+                    label = stat_value.get("label", self._format_key(stat_key))
+                    value = stat_value.get("value", "")
+                    suppressed = stat_value.get("suppressed", False)
+                else:
+                    label = self._format_key(stat_key)
+                    value = stat_value
+                    suppressed = False
+                stat_item = QTreeWidgetItem(cell_item)
+                stat_item.setText(0, label)
+                stat_item.setText(1, self._format_value(value, suppressed))
 
     def _populate_variable_combo(self, statistics):
         """Populate the visualization variable dropdown.
@@ -495,6 +556,7 @@ class StatsPanel(QDockWidget):
             lines.append("Summary Statistics:")
             lines.append("-" * 50)
             self._format_statistics_text(summary.get("statistics", {}), lines)
+            self._format_breakdown_text(summary.get("breakdown"), lines)
             lines.append("")
 
             # Per-shape details
@@ -516,7 +578,12 @@ class StatsPanel(QDockWidget):
             lines.append("")
             lines.append("Statistics:")
             lines.append("-" * 50)
-            self._format_statistics_text(self._current_result.get("statistics", {}), lines)
+            self._format_statistics_text(
+                self._current_result.get("statistics", {}), lines
+            )
+            self._format_breakdown_text(
+                self._current_result.get("breakdown"), lines
+            )
 
         text = "\n".join(lines)
         clipboard = QApplication.clipboard()
@@ -547,6 +614,29 @@ class StatsPanel(QDockWidget):
                     self._format_statistics_text(value, lines, indent + 1)
             else:
                 lines.append(f"{prefix}{self._format_key(key)}: {self._format_value(value)}")
+
+    def _format_breakdown_text(self, breakdown, lines, indent=0):
+        """Format breakdown data for text output.
+
+        Args:
+            breakdown: Breakdown dict from API response, or None
+            lines: List to append formatted lines to
+            indent: Indentation level
+        """
+        if not breakdown:
+            return
+
+        prefix = "  " * indent
+        lines.append("")
+        lines.append(f"{prefix}Breakdown:")
+        for _cell_key, cell_data in breakdown.items():
+            labels = cell_data.get("labels", {})
+            label_parts = [
+                labels[dim]["display"] for dim in sorted(labels)
+            ]
+            cell_label = ", ".join(label_parts)
+            count = cell_data.get("count", 0)
+            lines.append(f"{prefix}  {cell_label}: {self._format_value(count)}")
 
     def clear(self):
         """Clear all displayed results."""

@@ -246,6 +246,140 @@ class TestStatsPanelClear:
         assert panel._variable_names == []
 
 
+class TestStatsPanelBreakdownDisplay:
+    """Test StatsPanel breakdown display in tree."""
+
+    def _make_breakdown(self):
+        """Create a sample breakdown dict."""
+        return {
+            "1|child": {
+                "count": 180,
+                "statistics": {},
+                "labels": {
+                    "gender": {"value": "1", "display": "Male"},
+                    "age_group": {"value": "child", "display": "Child (0-17)"},
+                },
+            },
+            "2|adult": {
+                "count": 280,
+                "statistics": {},
+                "labels": {
+                    "gender": {"value": "2", "display": "Female"},
+                    "age_group": {"value": "adult", "display": "Adult (18-59)"},
+                },
+            },
+        }
+
+    def test_populate_breakdown_tree_adds_nodes(self):
+        """Test that _populate_breakdown_tree creates Breakdown node with cells."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+        breakdown = self._make_breakdown()
+        # Should not raise, and should call QTreeWidgetItem to create nodes
+        panel._populate_breakdown_tree(breakdown)
+
+    def test_populate_breakdown_tree_with_none_does_nothing(self):
+        """Test that _populate_breakdown_tree with None does not add nodes."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+        # Should not raise, and should be a no-op
+        panel._populate_breakdown_tree(None)
+
+    def test_populate_breakdown_tree_with_empty_does_nothing(self):
+        """Test that _populate_breakdown_tree with empty dict does not add nodes."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+        # Should not raise, and should be a no-op
+        panel._populate_breakdown_tree({})
+
+    def test_show_results_with_breakdown(self):
+        """Test that show_results calls _populate_breakdown_tree."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+        result = {
+            "total_count": 1260,
+            "query_method": "coordinates",
+            "areas_matched": 1,
+            "statistics": {"count": {"value": 1260}},
+            "breakdown": self._make_breakdown(),
+        }
+        panel.show_results(result)
+        assert panel._current_result == result
+
+    def test_show_batch_results_with_breakdown(self):
+        """Test that show_batch_results displays breakdown from summary."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+        result = {
+            "results": [
+                {"id": "z1", "total_count": 100, "statistics": {}},
+            ],
+            "summary": {
+                "total_count": 100,
+                "geometries_queried": 1,
+                "statistics": {},
+                "breakdown": self._make_breakdown(),
+            },
+        }
+        geometries = [{"id": "z1", "geometry": MagicMock()}]
+        panel.show_batch_results(result, geometries)
+        assert panel._current_result == result
+
+    def test_show_proximity_results_with_breakdown(self):
+        """Test that show_proximity_results displays breakdown."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+        result = {
+            "total_count": 500,
+            "query_method": "coordinates",
+            "areas_matched": 0,
+            "reference_points_count": 1,
+            "radius_km": 10,
+            "relation": "beyond",
+            "statistics": {},
+            "breakdown": self._make_breakdown(),
+        }
+        panel.show_proximity_results(result)
+        assert panel._current_result == result
+
+
+class TestStatsPanelBreakdownClipboard:
+    """Test clipboard copy with breakdown data."""
+
+    def _make_breakdown(self):
+        return {
+            "1|child": {
+                "count": 180,
+                "statistics": {},
+                "labels": {
+                    "gender": {"value": "1", "display": "Male"},
+                    "age_group": {"value": "child", "display": "Child (0-17)"},
+                },
+            },
+        }
+
+    def test_clipboard_includes_breakdown(self):
+        """Test that clipboard copy includes breakdown section."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+        result = {
+            "total_count": 180,
+            "query_method": "coordinates",
+            "areas_matched": 1,
+            "statistics": {},
+            "breakdown": self._make_breakdown(),
+        }
+        panel.show_results(result)
+        # Should not raise
+        panel._copy_to_clipboard()
+
+    def test_clipboard_omits_breakdown_when_absent(self):
+        """Test that clipboard copy works without breakdown."""
+        panel = StatsPanel(MagicMock(), MagicMock())
+        result = {
+            "total_count": 100,
+            "query_method": "coordinates",
+            "areas_matched": 1,
+            "statistics": {"count": 100},
+        }
+        panel.show_results(result)
+        # Should not raise
+        panel._copy_to_clipboard()
+
+
 class TestStatsPanelCopyToClipboard:
     """Test clipboard copy functionality."""
 

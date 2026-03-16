@@ -440,21 +440,21 @@ calls.
 - [x] Add `get_dimensions_from_process()` to client (returns empty list, not None)
 - [x] Add `fetch_dimension_options()` to processing utils
 - [x] Add `sanitize_breakdown_field_name()` to processing utils
-- [ ] Commit
+- [x] Commit
 
 ### Phase B: Stats panel breakdown display
 
-- [ ] Write test: `_populate_breakdown_tree()` with breakdown data adds "Breakdown" node with cells
-- [ ] Write test: `_populate_breakdown_tree()` with None/empty does nothing
-- [ ] Write test: `show_results()` with breakdown calls `_populate_breakdown_tree()`
-- [ ] Write test: `show_batch_results()` with breakdown in summary displays breakdown
-- [ ] Write test: `show_proximity_results()` with breakdown displays breakdown
-- [ ] Write test: clipboard copy includes breakdown section when present
-- [ ] Write test: clipboard copy omits breakdown section when not present
-- [ ] Add `_populate_breakdown_tree(breakdown)` method
-- [ ] Call from each `show_*()` method after `_populate_stats_tree()`
-- [ ] Add `_format_breakdown_text()` for clipboard output
-- [ ] Wire into `_copy_to_clipboard()` for all result types
+- [x] Write test: `_populate_breakdown_tree()` with breakdown data adds "Breakdown" node with cells
+- [x] Write test: `_populate_breakdown_tree()` with None/empty does nothing
+- [x] Write test: `show_results()` with breakdown calls `_populate_breakdown_tree()`
+- [x] Write test: `show_batch_results()` with breakdown in summary displays breakdown
+- [x] Write test: `show_proximity_results()` with breakdown displays breakdown
+- [x] Write test: clipboard copy includes breakdown section when present
+- [x] Write test: clipboard copy omits breakdown section when not present
+- [x] Add `_populate_breakdown_tree(breakdown)` method
+- [x] Call from each `show_*()` method after `_populate_stats_tree()`
+- [x] Add `_format_breakdown_text()` for clipboard output
+- [x] Wire into `_copy_to_clipboard()` for all result types
 - [ ] Commit
 
 ### Phase C: Processing algorithms
