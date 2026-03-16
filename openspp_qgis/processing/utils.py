@@ -1,7 +1,10 @@
 # Part of OpenSPP. See LICENSE file for full copyright and licensing details.
 """Shared utilities for OpenSPP Processing algorithms."""
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_variable_options(client, cached_names=None):
@@ -34,6 +37,7 @@ def fetch_variable_options(client, cached_names=None):
                     names.append(name)
         return names
     except Exception:
+        logger.warning("Failed to fetch variable options", exc_info=True)
         return []
 
 
@@ -60,6 +64,7 @@ def fetch_dimension_options(client, cached_names=None):
         dimensions = client.get_dimensions_from_process()
         return [d["name"] for d in dimensions if d.get("name")]
     except Exception:
+        logger.warning("Failed to fetch dimension options", exc_info=True)
         return []
 
 

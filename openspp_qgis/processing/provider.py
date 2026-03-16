@@ -38,7 +38,7 @@ class OpenSppProvider(QgsProcessingProvider):
         icon_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "icons",
-            "openspp.svg",
+            "openspp.png",
         )
         if os.path.exists(icon_path):
             return QIcon(icon_path)
@@ -55,9 +55,14 @@ class OpenSppProvider(QgsProcessingProvider):
     def set_client(self, client):
         """Update the API client and refresh algorithms.
 
+        Clears cached variable/dimension names so they are re-fetched
+        from the new server on next algorithm dialog open.
+
         Args:
             client: OpenSppClient instance (or None to disconnect)
         """
         self._client = client
         for alg in self._algorithms:
             alg._client = client
+            alg._variable_names = []
+            alg._dimension_names = []
