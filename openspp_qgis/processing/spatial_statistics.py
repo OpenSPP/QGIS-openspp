@@ -57,6 +57,7 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         self._classify_field = "total_count"
         self._dest_id = None
         self._breakdown_layer_info = {}  # {field_name: display_label}
+        self._selected_dimension_labels = []  # human-readable dimension names
 
     def name(self):
         return "spatial_statistics"
@@ -156,6 +157,9 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 self._dimension_names[i]
                 for i in dim_indices
                 if i < len(self._dimension_names)
+            ]
+            self._selected_dimension_labels = [
+                name.replace("_", " ").title() for name in group_by
             ]
 
         # Build filters
@@ -372,8 +376,12 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         project = QgsProject.instance()
         root = project.layerTreeRoot()
 
-        # Create a layer group for the breakdown layers
-        group_name = "OpenSPP - Disaggregation"
+        # Create a layer group named after the selected dimensions
+        if self._selected_dimension_labels:
+            dims_str = " x ".join(self._selected_dimension_labels)
+            group_name = f"OpenSPP - {dims_str}"
+        else:
+            group_name = "OpenSPP - Disaggregation"
         group = root.insertGroup(0, group_name)
 
         for field_name in sorted(self._breakdown_layer_info.keys()):
