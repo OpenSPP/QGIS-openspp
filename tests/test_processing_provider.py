@@ -458,6 +458,159 @@ class TestSpatialStatisticsAlgorithm:
         assert alg._breakdown_layer_info["disagg_Male"] == "Male"
         assert alg._breakdown_layer_info["disagg_Female"] == "Female"
 
+    def test_breakdown_pct_values_computed(self):
+        """Test that percentage values are correctly computed per feature."""
+        mock_client = MagicMock()
+        mock_client.query_statistics_batch.return_value = {
+            "results": [
+                {
+                    "id": "0",
+                    "total_count": 100,
+                    "statistics": {},
+                    "breakdown": {
+                        "1": {
+                            "count": 580,
+                            "statistics": {},
+                            "labels": {"gender": {"value": "1", "display": "Male"}},
+                        },
+                        "2": {
+                            "count": 670,
+                            "statistics": {},
+                            "labels": {"gender": {"value": "2", "display": "Female"}},
+                        },
+                    },
+                },
+                {
+                    "id": "1",
+                    "total_count": 50,
+                    "statistics": {},
+                    "breakdown": {
+                        "1": {
+                            "count": 200,
+                            "statistics": {},
+                            "labels": {"gender": {"value": "1", "display": "Male"}},
+                        },
+                        "2": {
+                            "count": 300,
+                            "statistics": {},
+                            "labels": {"gender": {"value": "2", "display": "Female"}},
+                        },
+                    },
+                },
+            ],
+            "summary": {"total_count": 150},
+        }
+
+        features = [_make_mock_feature(fid=i) for i in range(2)]
+        alg, sink = _setup_spatial_alg(features, mock_client)
+        alg._dimension_names = ["gender"]
+        alg.parameterAsEnums = MagicMock(return_value=[0])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        # Extract the attributes from the two addFeature calls
+        calls = sink.addFeature.call_args_list
+        assert len(calls) == 2
+
+        # Attributes order: id, total_count, [stat_keys...],
+        #   disagg_Female, disagg_Female_pct, disagg_Male, disagg_Male_pct
+        # (breakdown fields are sorted alphabetically, count then pct)
+        feat0_attrs = calls[0][0][0].attributes()
+        feat1_attrs = calls[1][0][0].attributes()
+
+        # Feature 0: Male=580 (46.4%), Female=670 (53.6%)
+        # Find the breakdown values at the end of the attrs list
+        # id=0, total_count=100, then breakdown pairs
+        bd_attrs_0 = feat0_attrs[2:]  # skip id, total_count
+        # Should be: [Female_count, Female_pct, Male_count, Male_pct]
+        assert bd_attrs_0[0] == 670.0  # disagg_Female
+        assert abs(bd_attrs_0[1] - 53.6) < 0.1  # disagg_Female_pct
+        assert bd_attrs_0[2] == 580.0  # disagg_Male
+        assert abs(bd_attrs_0[3] - 46.4) < 0.1  # disagg_Male_pct
+
+        # Feature 1: Male=200 (40%), Female=300 (60%)
+        bd_attrs_1 = feat1_attrs[2:]
+        assert bd_attrs_1[0] == 300.0  # disagg_Female
+        assert abs(bd_attrs_1[1] - 60.0) < 0.1  # disagg_Female_pct
+        assert bd_attrs_1[2] == 200.0  # disagg_Male
+        assert abs(bd_attrs_1[3] - 40.0) < 0.1  # disagg_Male_pct
+
+    def test_breakdown_pct_zero_total(self):
+        """Test that percentages are 0.0 when the breakdown total is zero."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 0,
+            "statistics": {},
+            "breakdown": {
+                "1": {
+                    "count": 0,
+                    "statistics": {},
+                    "labels": {"gender": {"value": "1", "display": "Male"}},
+                },
+                "2": {
+                    "count": 0,
+                    "statistics": {},
+                    "labels": {"gender": {"value": "2", "display": "Female"}},
+                },
+            },
+        }
+
+        features = [_make_mock_feature(fid=0)]
+        alg, sink = _setup_spatial_alg(features, mock_client)
+        alg._dimension_names = ["gender"]
+        alg.parameterAsEnums = MagicMock(return_value=[0])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        calls = sink.addFeature.call_args_list
+        feat_attrs = calls[0][0][0].attributes()
+        # Breakdown attrs: disagg_Female, disagg_Female_pct, disagg_Male, disagg_Male_pct
+        bd_attrs = feat_attrs[2:]
+        assert bd_attrs[1] == 0.0  # Female_pct
+        assert bd_attrs[3] == 0.0  # Male_pct
+
+    def test_breakdown_pct_in_layer_info(self):
+        """Test that _pct entries are in _breakdown_layer_info for style creation."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 100,
+            "statistics": {},
+            "breakdown": {
+                "1": {
+                    "count": 60,
+                    "statistics": {},
+                    "labels": {"gender": {"value": "1", "display": "Male"}},
+                },
+                "2": {
+                    "count": 40,
+                    "statistics": {},
+                    "labels": {"gender": {"value": "2", "display": "Female"}},
+                },
+            },
+        }
+
+        features = [_make_mock_feature(fid=0)]
+        alg, sink = _setup_spatial_alg(features, mock_client)
+        alg._dimension_names = ["gender"]
+        alg.parameterAsEnums = MagicMock(return_value=[0])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        info = alg._breakdown_layer_info
+        assert "disagg_Male_pct" in info
+        assert "disagg_Female_pct" in info
+        assert info["disagg_Male_pct"] == "Male (%)"
+        assert info["disagg_Female_pct"] == "Female (%)"
+
     def test_no_breakdown_info_without_group_by(self):
         """Test that _breakdown_layer_info is empty without group_by."""
         mock_client = MagicMock()
@@ -518,6 +671,177 @@ class TestSpatialStatisticsAlgorithm:
         assert info["disagg_Adult_1859_Male"] == "Adult (18-59) / Male"
         assert "disagg_Child_017_Female" in info
         assert info["disagg_Child_017_Female"] == "Child (0-17) / Female"
+
+
+class TestBreakdownStyles:
+    """Test postProcessAlgorithm style creation for breakdown columns."""
+
+    def test_renames_current_style_to_classify_field(self):
+        """The current style (whatever its name) is renamed to the classify field."""
+        alg = SpatialStatisticsAlgorithm()
+        alg._dest_id = "layer_123"
+        alg._classify_field = "total_households"
+        alg._breakdown_layer_info = {"disagg_Male": "Male", "disagg_Female": "Female"}
+        alg._selected_dimension_labels = ["Gender"]
+
+        mock_layer = MagicMock()
+        mock_layer.isValid.return_value = True
+        mock_fields = MagicMock()
+        mock_fields.indexOf.return_value = 0  # field always exists
+        mock_layer.fields.return_value = mock_fields
+
+        mock_style_mgr = MagicMock()
+        mock_style_mgr.currentStyle.return_value = "default"
+        mock_layer.styleManager.return_value = mock_style_mgr
+
+        mock_context = MagicMock()
+        mock_context.getMapLayer.return_value = mock_layer
+        mock_context.layersToLoadOnCompletion.return_value = {"layer_123": True}
+        mock_context.layerToLoadOnCompletionDetails.return_value = MagicMock()
+
+        feedback = MagicMock()
+        alg.postProcessAlgorithm(mock_context, feedback)
+
+        # Should rename "default" to "total_households", not "" to "total_households"
+        mock_style_mgr.renameStyle.assert_called_once_with("default", "total_households")
+        # Should set current style back to classify field
+        mock_style_mgr.setCurrentStyle.assert_called_with("total_households")
+
+
+class TestSpatialPopulationFilter:
+    """Test population filter handling in SpatialStatisticsAlgorithm.
+
+    Optional enum parameters (PROGRAM, CEL_EXPRESSION, FILTER_MODE)
+    must not be included in the population filter when the user did
+    not select them. QGIS parameterAsEnum returns 0 for unset optional
+    enums, which is indistinguishable from "user selected index 0".
+    The raw parameter value (None) must be checked instead.
+    """
+
+    def test_unset_program_not_included_in_filter(self):
+        """PROGRAM=None should not add a program to the population filter."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 100,
+            "statistics": {"total_households": 50},
+        }
+
+        feature = _make_mock_feature(fid=1)
+        alg, sink = _setup_spatial_alg([feature], mock_client)
+        alg._program_values = [7, 6, 5]
+        alg._expression_values = ["all_registrants", "seniors_60", "adults_18"]
+
+        # Simulate: user set CEL_EXPRESSION=2, did NOT set PROGRAM or FILTER_MODE
+        parameters = {
+            alg.PROGRAM: None,
+            alg.CEL_EXPRESSION: 2,
+            alg.FILTER_MODE: None,
+        }
+        # parameterAsEnum returns: VARIABLES=0, PROGRAM=0, CEL_EXPRESSION=2, FILTER_MODE=0
+        alg.parameterAsEnum = MagicMock(side_effect=[0, 0, 2, 0])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm(parameters, MagicMock(), feedback)
+
+        call_kwargs = mock_client.query_statistics.call_args[1]
+        pop_filter = call_kwargs.get("population_filter")
+        assert pop_filter is not None, "population_filter should be set"
+        assert "program" not in pop_filter, "program should not be in filter when PROGRAM=None"
+        assert pop_filter["cel_expression"] == "adults_18"
+        assert "mode" not in pop_filter, "mode should not be set without both program and expression"
+
+    def test_unset_expression_not_included_in_filter(self):
+        """CEL_EXPRESSION=None should not add an expression to the filter."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 100,
+            "statistics": {},
+        }
+
+        feature = _make_mock_feature(fid=1)
+        alg, sink = _setup_spatial_alg([feature], mock_client)
+        alg._program_values = [7, 6, 5]
+        alg._expression_values = ["all_registrants", "seniors_60"]
+
+        # Simulate: user set PROGRAM=1, did NOT set CEL_EXPRESSION or FILTER_MODE
+        parameters = {
+            alg.PROGRAM: 1,
+            alg.CEL_EXPRESSION: None,
+            alg.FILTER_MODE: None,
+        }
+        alg.parameterAsEnum = MagicMock(side_effect=[0, 1, 0, 0])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm(parameters, MagicMock(), feedback)
+
+        call_kwargs = mock_client.query_statistics.call_args[1]
+        pop_filter = call_kwargs.get("population_filter")
+        assert pop_filter is not None
+        assert pop_filter["program"] == 6
+        assert "cel_expression" not in pop_filter
+
+    def test_both_set_includes_mode(self):
+        """When both PROGRAM and CEL_EXPRESSION are set, mode is included."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 100,
+            "statistics": {},
+        }
+
+        feature = _make_mock_feature(fid=1)
+        alg, sink = _setup_spatial_alg([feature], mock_client)
+        alg._program_values = [7, 6]
+        alg._expression_values = ["all_registrants", "seniors_60"]
+
+        parameters = {
+            alg.PROGRAM: 0,
+            alg.CEL_EXPRESSION: 1,
+            alg.FILTER_MODE: 1,
+        }
+        alg.parameterAsEnum = MagicMock(side_effect=[0, 0, 1, 1])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm(parameters, MagicMock(), feedback)
+
+        call_kwargs = mock_client.query_statistics.call_args[1]
+        pop_filter = call_kwargs.get("population_filter")
+        assert pop_filter["program"] == 7
+        assert pop_filter["cel_expression"] == "seniors_60"
+        assert pop_filter["mode"] == "or"
+
+    def test_neither_set_no_filter(self):
+        """When neither PROGRAM nor CEL_EXPRESSION is set, no population filter."""
+        mock_client = MagicMock()
+        mock_client.query_statistics.return_value = {
+            "total_count": 100,
+            "statistics": {},
+        }
+
+        feature = _make_mock_feature(fid=1)
+        alg, sink = _setup_spatial_alg([feature], mock_client)
+        alg._program_values = [7, 6]
+        alg._expression_values = ["all_registrants"]
+
+        parameters = {
+            alg.PROGRAM: None,
+            alg.CEL_EXPRESSION: None,
+            alg.FILTER_MODE: None,
+        }
+        alg.parameterAsEnum = MagicMock(side_effect=[0, 0, 0, 0])
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm(parameters, MagicMock(), feedback)
+
+        call_kwargs = mock_client.query_statistics.call_args[1]
+        assert call_kwargs.get("population_filter") is None
 
 
 class TestProximityStatisticsAlgorithm:
@@ -743,3 +1067,51 @@ class TestProximityStatisticsAlgorithm:
         alg.processAlgorithm({}, MagicMock(), feedback)
 
         mock_sink.addFeature.assert_called_once()
+
+    def test_proximity_breakdown_pct_values(self):
+        """Test that proximity breakdown includes _pct fields."""
+        mock_client = MagicMock()
+        mock_client.query_proximity.return_value = {
+            "total_count": 100,
+            "statistics": {},
+            "breakdown": {
+                "1": {
+                    "count": 60,
+                    "labels": {"gender": {"value": "1", "display": "Male"}},
+                },
+                "2": {
+                    "count": 40,
+                    "labels": {"gender": {"value": "2", "display": "Female"}},
+                },
+            },
+        }
+
+        feature = _make_mock_point_feature()
+        alg = ProximityStatisticsAlgorithm()
+        alg._client = mock_client
+        alg._dimension_names = ["gender"]
+
+        mock_source = MagicMock()
+        mock_source.getFeatures.return_value = iter([feature])
+        mock_sink = MagicMock()
+
+        alg.parameterAsSource = MagicMock(return_value=mock_source)
+        alg.parameterAsDouble = MagicMock(return_value=10.0)
+        alg.parameterAsEnum = MagicMock(side_effect=[1, 0, 0, 0, 0])
+        alg.parameterAsEnums = MagicMock(return_value=[0])
+        alg.parameterAsSink = MagicMock(return_value=(mock_sink, "output_id"))
+
+        feedback = MagicMock()
+        feedback.isCanceled.return_value = False
+
+        alg.processAlgorithm({}, MagicMock(), feedback)
+
+        calls = mock_sink.addFeature.call_args_list
+        feat_attrs = calls[0][0][0].attributes()
+        # Attrs: total_count, radius_km, relation, ref_points_count,
+        #        disagg_Female, disagg_Female_pct, disagg_Male, disagg_Male_pct
+        bd_attrs = feat_attrs[4:]
+        assert bd_attrs[0] == 40.0   # disagg_Female count
+        assert bd_attrs[1] == 40.0   # disagg_Female_pct
+        assert bd_attrs[2] == 60.0   # disagg_Male count
+        assert bd_attrs[3] == 60.0   # disagg_Male_pct

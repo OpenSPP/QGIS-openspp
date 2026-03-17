@@ -665,6 +665,13 @@ class OpenSppPlugin:
         Detects layers from OpenSPP's OGC API - Features endpoint and
         automatically fetches and applies the corresponding QML style.
 
+        Also removes the restrictToRequestBBOX parameter from the layer
+        URI. QGIS sets this by default when dragging from the Browser
+        panel, which causes a new server request on every map render
+        with the current view extent as a bbox filter. For small
+        collections this is unnecessary and can overwhelm the server
+        with concurrent requests.
+
         Args:
             layer: QgsMapLayer that was just added
         """
@@ -677,6 +684,9 @@ class OpenSppPlugin:
         collection_id = self._extract_collection_id(layer.source())
         if not collection_id:
             return
+
+        # Remove restrictToRequestBBOX to prevent per-render bbox queries.
+        self._remove_bbox_restriction(layer)
 
         # Server returns 404 for non-styled layers, handled gracefully below.
         self.log(f"Auto-styling OpenSPP layer: {collection_id}")
@@ -743,6 +753,40 @@ class OpenSppPlugin:
         if match:
             return match.group(1)
         return None
+
+    def _remove_bbox_restriction(self, layer):
+        """Remove restrictToRequestBBOX from an OAPIF layer URI.
+
+        When QGIS loads an OAPIF layer from the Browser panel, it sets
+        restrictToRequestBBOX='1' by default. This causes a new server
+        request on every map render with the current view extent as
+        bbox filter. For OpenSPP collections (typically small enough to
+        fit in a single page), this is unnecessary and can overwhelm
+        the server with concurrent requests.
+
+        Args:
+            layer: QgsVectorLayer to modify
+        """
+        source = layer.source()
+        if "restrictToRequestBBOX" not in source:
+            return
+
+        # Strip both quoted and unquoted forms:
+        #   restrictToRequestBBOX='1'
+        #   restrictToRequestBBOX=1
+        cleaned = re.sub(r"\s*restrictToRequestBBOX='[^']*'", "", source)
+        cleaned = re.sub(r"\s*restrictToRequestBBOX=\S+", "", cleaned)
+        cleaned = cleaned.strip()
+
+        if cleaned == source.strip():
+            return
+
+        provider_type = layer.providerType()
+        layer.setDataSource(cleaned, layer.name(), provider_type)
+        self.log(
+            f"Removed restrictToRequestBBOX from layer '{layer.name()}' "
+            f"to prevent per-render server requests"
+        )
 
     # === Dialog Actions ===
 

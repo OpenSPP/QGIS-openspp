@@ -51,6 +51,8 @@ class OpenSppClient:
     ASYNC_TIMEOUT_MS = 300000  # 5 minutes max wait for async jobs
     # Request async for batches larger than this threshold
     ASYNC_BATCH_THRESHOLD = 5
+    # Maximum concurrent jobs submitted to the server at one time
+    MAX_CONCURRENT_JOBS = 5
     # OGC Process identifiers
     PROCESS_SPATIAL_STATISTICS = "spatial-statistics"
     PROCESS_PROXIMITY_STATISTICS = "proximity-statistics"
@@ -581,42 +583,29 @@ class OpenSppClient:
 
     # === OGC API Processes Execution ===
 
-    def _execute_process(
+    def _submit_process(
         self,
         process_id: str,
         inputs: dict,
         prefer_async: bool = False,
-        timeout: int | None = None,
-        on_progress=None,
         use_blocking: bool = False,
-    ) -> dict:
-        """Execute an OGC API Process, handling both sync and async responses.
-
-        Sends POST /ogc/processes/{process_id}/execution with the given inputs.
-        If the server returns 200, the result is returned directly. If the server
-        returns 201 (async job created, either by request or forced by the server),
-        polls the job until completion and returns the results.
+        timeout: int | None = None,
+    ) -> tuple:
+        """Submit an OGC API Process execution request without waiting for results.
 
         Args:
             process_id: OGC process identifier (e.g., "spatial-statistics")
             inputs: Process inputs dict (will be wrapped in {"inputs": ...})
             prefer_async: Send Prefer: respond-async header
-            timeout: Total timeout in milliseconds (covers both sync execution
-                and async polling). Defaults to ASYNC_TIMEOUT_MS.
-            on_progress: Optional callback for async progress updates.
-                Called as on_progress(status, progress, message) where status
-                is the job status string, progress is 0-100 int, and message
-                is a human-readable string. Return False from the callback to
-                request cancellation (dismiss the job).
-            use_blocking: Use Python urllib instead of Qt networking.
-                Required when running in a background thread (e.g., Processing
-                algorithms). Default False (main thread, toolbar actions).
+            use_blocking: Use Python urllib (required in background threads)
+            timeout: Request timeout in milliseconds
 
         Returns:
-            Process result (parsed JSON body)
+            ("complete", result_dict) for HTTP 200 (synchronous result)
+            ("async", job_url, poll_interval_ms) for HTTP 201 (async job created)
 
         Raises:
-            Exception: On execution failure, job failure, or timeout
+            Exception: On error responses (400, 404, 5xx, etc.)
         """
         effective_timeout = timeout or self.ASYNC_TIMEOUT_MS
 
@@ -638,27 +627,17 @@ class OpenSppClient:
         )
 
         if status_code == 200:
-            return body
+            return ("complete", body)
 
         if status_code == 201:
-            # Async job created; poll for results
             location = headers.get("Location") or headers.get("location")
             if not location:
                 raise Exception(
                     "Server returned 201 (async job created) but no Location header"
                 )
-
-            # Parse initial Retry-After hint from the 201 response
             retry_after = headers.get("Retry-After") or headers.get("retry-after")
-            initial_poll_interval = self._parse_retry_after(retry_after)
-
-            return self._poll_job(
-                location,
-                timeout_ms=effective_timeout,
-                initial_poll_interval_ms=initial_poll_interval,
-                on_progress=on_progress,
-                use_blocking=use_blocking,
-            )
+            poll_interval = self._parse_retry_after(retry_after)
+            return ("async", location, poll_interval)
 
         # Error responses
         message = ""
@@ -673,6 +652,202 @@ class OpenSppClient:
             if message
             else f"Process execution failed (HTTP {status_code})"
         )
+
+    def _execute_process(
+        self,
+        process_id: str,
+        inputs: dict,
+        prefer_async: bool = False,
+        timeout: int | None = None,
+        on_progress=None,
+        use_blocking: bool = False,
+    ) -> dict:
+        """Execute an OGC API Process, handling both sync and async responses.
+
+        Submits the process and polls until completion. For concurrent batch
+        submission use _run_job_queue instead.
+
+        Args:
+            process_id: OGC process identifier (e.g., "spatial-statistics")
+            inputs: Process inputs dict (will be wrapped in {"inputs": ...})
+            prefer_async: Send Prefer: respond-async header
+            timeout: Total timeout in milliseconds. Defaults to ASYNC_TIMEOUT_MS.
+            on_progress: Optional callback(status, progress, message). Return
+                False to request cancellation.
+            use_blocking: Use Python urllib (required in background threads).
+
+        Returns:
+            Process result (parsed JSON body)
+
+        Raises:
+            Exception: On execution failure, job failure, or timeout
+        """
+        effective_timeout = timeout or self.ASYNC_TIMEOUT_MS
+
+        outcome = self._submit_process(
+            process_id,
+            inputs,
+            prefer_async=prefer_async,
+            use_blocking=use_blocking,
+            timeout=effective_timeout,
+        )
+
+        if outcome[0] == "complete":
+            return outcome[1]
+
+        _, job_url, initial_poll_interval = outcome
+        return self._poll_job(
+            job_url,
+            timeout_ms=effective_timeout,
+            initial_poll_interval_ms=initial_poll_interval,
+            on_progress=on_progress,
+            use_blocking=use_blocking,
+        )
+
+    def _run_job_queue(
+        self,
+        job_descriptors: list,
+        use_blocking: bool = False,
+        on_progress=None,
+    ) -> list:
+        """Submit and poll a list of process jobs using a sliding window.
+
+        Submits up to MAX_CONCURRENT_JOBS jobs at a time. As jobs complete,
+        backfills from the queue. Polls active jobs in round-robin with a
+        sleep between rounds to avoid hammering the server.
+
+        Args:
+            job_descriptors: List of dicts with keys:
+                - process_id: OGC process identifier
+                - inputs: process inputs dict
+                - prefer_async: bool (defaults to True)
+            use_blocking: Use Python urllib (required in background threads)
+            on_progress: Optional callback(status, progress, message).
+                Return False to cancel.
+
+        Returns:
+            List of result dicts in the same order as job_descriptors.
+
+        Raises:
+            Exception: If any job fails or the queue is cancelled.
+        """
+        total = len(job_descriptors)
+        if total == 0:
+            return []
+
+        results = [None] * total
+        pending = list(range(total))
+        # Each entry: {"idx": int, "status_url": str, "results_url": str}
+        active = []
+        in_flight = 0  # count of submitted jobs not yet completed
+        completed = 0
+
+        def fill_active():
+            nonlocal completed, in_flight
+            while pending and in_flight < self.MAX_CONCURRENT_JOBS:
+                idx = pending.pop(0)
+                desc = job_descriptors[idx]
+                outcome = self._submit_process(
+                    desc["process_id"],
+                    desc["inputs"],
+                    prefer_async=desc.get("prefer_async", True),
+                    use_blocking=use_blocking,
+                )
+                if outcome[0] == "complete":
+                    results[idx] = outcome[1]
+                    completed += 1
+                    QgsMessageLog.logMessage(
+                        f"Chunk {idx + 1}/{total} done (sync)",
+                        "OpenSPP",
+                        Qgis.Info,
+                    )
+                else:
+                    _, job_url, _ = outcome
+                    if job_url.startswith("/"):
+                        job_url = f"{self.server_url}{job_url}"
+                    status_url = job_url.rstrip("/")
+                    if status_url.endswith("/results"):
+                        status_url = status_url.rsplit("/results", 1)[0]
+                    results_url = f"{status_url}/results"
+                    active.append({
+                        "idx": idx,
+                        "status_url": status_url,
+                        "results_url": results_url,
+                    })
+                    in_flight += 1
+                    QgsMessageLog.logMessage(
+                        f"Submitted chunk {idx + 1}/{total} "
+                        f"({in_flight} in-flight, {len(pending)} queued)",
+                        "OpenSPP",
+                        Qgis.Info,
+                    )
+
+        fill_active()
+
+        while active:
+            min_poll_interval = self.JOB_POLL_INTERVAL_MS
+            still_active = []
+
+            # Snapshot active before the loop; fill_active() may append new
+            # jobs to active mid-loop (when a job completes and backfills).
+            # We preserve those newly added jobs after the loop.
+            active_snapshot = list(active)
+
+            for job in active_snapshot:
+                status_info, retry_after_val = self._get_job_status(
+                    job["status_url"], use_blocking
+                )
+
+                if status_info is None:
+                    # Transient error; keep in active and retry next round
+                    still_active.append(job)
+                    continue
+
+                if retry_after_val:
+                    interval = self._parse_retry_after(retry_after_val)
+                    min_poll_interval = min(min_poll_interval, interval)
+
+                status = status_info.get("status", "")
+                message = status_info.get("message", "")
+
+                if status == "successful":
+                    result = self._get_job_results(job["results_url"], use_blocking)
+                    results[job["idx"]] = result
+                    in_flight -= 1
+                    completed += 1
+                    QgsMessageLog.logMessage(
+                        f"Chunk {job['idx'] + 1}/{total} done "
+                        f"({completed}/{total} complete)",
+                        "OpenSPP",
+                        Qgis.Info,
+                    )
+                    fill_active()
+                elif status in ("failed", "dismissed"):
+                    raise Exception(
+                        f"Job failed: {message}" if message else "Job failed"
+                    )
+                else:
+                    still_active.append(job)
+
+            # Preserve jobs that were appended by fill_active() during the loop
+            newly_added = active[len(active_snapshot):]
+            active[:] = still_active + newly_added
+
+            if on_progress is not None:
+                overall = int(completed / total * 100)
+                should_continue = on_progress(
+                    "running", overall, f"{completed}/{total} chunks complete"
+                )
+                if should_continue is False:
+                    raise Exception("Job queue cancelled by user")
+
+            if active:
+                if use_blocking:
+                    time.sleep(min_poll_interval / 1000.0)
+                else:
+                    self._sleep_ms(min_poll_interval)
+
+        return results
 
     def _poll_job(
         self,
@@ -1059,54 +1234,44 @@ class OpenSppClient:
                 use_blocking=use_blocking,
             )
 
-        # Split into chunks of MAX_BATCH_SIZE
+        # Multiple chunks: build job descriptors and submit concurrently
         chunks = [
             geometries[i : i + self.MAX_BATCH_SIZE]
             for i in range(0, len(geometries), self.MAX_BATCH_SIZE)
         ]
 
+        job_descriptors = []
+        for chunk in chunks:
+            inputs = {
+                "geometry": [
+                    {"id": g["id"], "value": g["geometry"]} for g in chunk
+                ]
+            }
+            if filters:
+                inputs["filters"] = filters
+            if variables:
+                inputs["variables"] = variables
+            if group_by:
+                inputs["group_by"] = group_by
+            if population_filter:
+                inputs["population_filter"] = population_filter
+            job_descriptors.append({
+                "process_id": self.PROCESS_SPATIAL_STATISTICS,
+                "inputs": inputs,
+                "prefer_async": True,
+            })
+
+        chunk_results = self._run_job_queue(
+            job_descriptors,
+            use_blocking=use_blocking,
+            on_progress=on_progress,
+        )
+
         all_results = []
-        total_geometries = len(geometries)
-        processed = 0
-
-        for chunk_idx, chunk in enumerate(chunks):
-            QgsMessageLog.logMessage(
-                f"Batch chunk {chunk_idx + 1}/{len(chunks)} "
-                f"({len(chunk)} geometries)",
-                "OpenSPP",
-                Qgis.Info,
-            )
-
-            def chunk_progress(status, progress, message):
-                # Scale progress: each chunk contributes proportionally
-                chunk_base = int(processed / total_geometries * 100)
-                chunk_share = int(len(chunk) / total_geometries * 100)
-                overall = chunk_base + int(progress * chunk_share / 100)
-                label = (
-                    f"Chunk {chunk_idx + 1}/{len(chunks)}"
-                    + (f": {message}" if message else "")
-                )
-                if on_progress:
-                    return on_progress(status, overall, label)
-                return True
-
-            chunk_result = self._query_statistics_batch_single(
-                chunk,
-                filters=filters,
-                variables=variables,
-                group_by=group_by,
-                population_filter=population_filter,
-                on_progress=chunk_progress,
-                use_blocking=use_blocking,
-            )
-
+        for chunk_result in chunk_results:
             all_results.extend(chunk_result.get("results", []))
-            processed += len(chunk)
 
-        # Build merged summary from all results
-        summary = self._build_batch_summary(all_results)
-
-        return {"results": all_results, "summary": summary}
+        return {"results": all_results, "summary": self._build_batch_summary(all_results)}
 
     def _build_batch_summary(self, results: list) -> dict:
         """Build a summary dict from merged batch results."""

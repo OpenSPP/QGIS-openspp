@@ -240,14 +240,20 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
                 if i < len(self._dimension_names)
             ]
 
-        # Resolve population filter
+        # Resolve population filter.
+        # Optional enum parameters return 0 from parameterAsEnum even when
+        # unset, so check the raw parameter value to distinguish "user
+        # selected index 0" from "user did not select anything".
         population_filter = None
         program_idx = self.parameterAsEnum(parameters, self.PROGRAM, context)
         expression_idx = self.parameterAsEnum(parameters, self.CEL_EXPRESSION, context)
         mode_idx = self.parameterAsEnum(parameters, self.FILTER_MODE, context)
 
-        has_program = self._program_values and program_idx < len(self._program_values)
-        has_expression = self._expression_values and expression_idx < len(self._expression_values)
+        program_set = parameters.get(self.PROGRAM) is not None
+        expression_set = parameters.get(self.CEL_EXPRESSION) is not None
+
+        has_program = program_set and self._program_values and program_idx < len(self._program_values)
+        has_expression = expression_set and self._expression_values and expression_idx < len(self._expression_values)
 
         if has_program or has_expression:
             population_filter = {}
@@ -332,6 +338,7 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         breakdown_field_names.sort()
         for field_name in breakdown_field_names:
             fields.append(QgsField(field_name, QVariant.Double))
+            fields.append(QgsField(f"{field_name}_pct", QVariant.Double))
 
         sink, dest_id = self.parameterAsSink(
             parameters,
@@ -353,9 +360,12 @@ class ProximityStatisticsAlgorithm(QgsProcessingAlgorithm):
         for key in stat_keys:
             val = stats.get(key, 0)
             attrs.append(_safe_float(val))
+        bd_total = sum(_safe_float(bd_values.get(fn, 0)) for fn in breakdown_field_names)
         for field_name in breakdown_field_names:
-            val = bd_values.get(field_name, 0)
-            attrs.append(_safe_float(val))
+            val = _safe_float(bd_values.get(field_name, 0))
+            attrs.append(val)
+            pct = (val / bd_total * 100.0) if bd_total > 0 else 0.0
+            attrs.append(pct)
         feat.setAttributes(attrs)
         sink.addFeature(feat)
         del sink

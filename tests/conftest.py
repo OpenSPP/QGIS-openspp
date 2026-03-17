@@ -65,6 +65,26 @@ class _StubClass:
         super().__init_subclass__(**kwargs)
 
 
+class _StubFeature:
+    """Stub for QgsFeature that stores and returns attributes and geometry."""
+
+    def __init__(self, *args, **kwargs):
+        self._attrs = []
+        self._geometry = None
+
+    def setAttributes(self, attrs):
+        self._attrs = list(attrs)
+
+    def attributes(self):
+        return list(self._attrs)
+
+    def setGeometry(self, geom):
+        self._geometry = geom
+
+    def geometry(self):
+        return self._geometry
+
+
 class _StubWidget(_StubClass):
     """Stub for Qt widgets that supports common attribute access.
 
@@ -113,7 +133,7 @@ def _create_mock_qgis_modules():
     core.QgsDistanceArea = _StubClass
     core.QgsCoordinateReferenceSystem = _StubClass
     core.QgsDataSourceUri = MagicMock
-    core.QgsFeature = MagicMock
+    core.QgsFeature = _StubFeature
     core.QgsField = MagicMock
     core.QgsGraduatedSymbolRenderer = MagicMock()
     core.QgsGraduatedSymbolRenderer.Jenks = 0

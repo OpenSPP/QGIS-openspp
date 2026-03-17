@@ -230,14 +230,20 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 name.replace("_", " ").title() for name in group_by
             ]
 
-        # Resolve population filter
+        # Resolve population filter.
+        # Optional enum parameters return 0 from parameterAsEnum even when
+        # unset, so check the raw parameter value to distinguish "user
+        # selected index 0" from "user did not select anything".
         population_filter = None
         program_idx = self.parameterAsEnum(parameters, self.PROGRAM, context)
         expression_idx = self.parameterAsEnum(parameters, self.CEL_EXPRESSION, context)
         mode_idx = self.parameterAsEnum(parameters, self.FILTER_MODE, context)
 
-        has_program = self._program_values and program_idx < len(self._program_values)
-        has_expression = self._expression_values and expression_idx < len(self._expression_values)
+        program_set = parameters.get(self.PROGRAM) is not None
+        expression_set = parameters.get(self.CEL_EXPRESSION) is not None
+
+        has_program = program_set and self._program_values and program_idx < len(self._program_values)
+        has_expression = expression_set and self._expression_values and expression_idx < len(self._expression_values)
 
         if has_program or has_expression:
             population_filter = {}
@@ -342,9 +348,15 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                     display_parts = [labels[dim]["display"] for dim in sorted(labels)]
                     breakdown_display[field_name] = " / ".join(display_parts)
         breakdown_field_names = sorted(breakdown_columns.keys())
-        self._breakdown_layer_info = breakdown_display
+        self._breakdown_layer_info = dict(breakdown_display)
         for field_name in breakdown_field_names:
             fields.append(QgsField(field_name, QVariant.Double))
+            fields.append(QgsField(f"{field_name}_pct", QVariant.Double))
+            # Add _pct entry to layer info for style creation
+            if field_name in breakdown_display:
+                self._breakdown_layer_info[f"{field_name}_pct"] = (
+                    f"{breakdown_display[field_name]} (%)"
+                )
 
         sink, dest_id = self.parameterAsSink(
             parameters,
@@ -378,9 +390,13 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
                 labels = cell_data.get("labels", {})
                 field_name = sanitize_breakdown_field_name(labels)
                 bd_values[field_name] = cell_data.get("count", 0)
+            # Compute total for percentage calculation
+            bd_total = sum(_safe_float(bd_values.get(fn, 0)) for fn in breakdown_field_names)
             for field_name in breakdown_field_names:
-                val = bd_values.get(field_name, 0)
-                attrs.append(_safe_float(val))
+                val = _safe_float(bd_values.get(field_name, 0))
+                attrs.append(val)
+                pct = (val / bd_total * 100.0) if bd_total > 0 else 0.0
+                attrs.append(pct)
 
             feat.setAttributes(attrs)
             sink.addFeature(feat)
@@ -473,8 +489,11 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         """
         style_mgr = layer.styleManager()
 
-        # Rename the default style to the main variable name
-        style_mgr.renameStyle("", self._classify_field)
+        # Rename the default style to the main variable name.
+        # QGIS names the initial style via QgsMapLayerStyleManager::defaultStyleName()
+        # which returns tr("default"). Try that first, fall back to empty string.
+        current = style_mgr.currentStyle()
+        style_mgr.renameStyle(current, self._classify_field)
 
         for field_name in sorted(self._breakdown_layer_info.keys()):
             display_label = self._breakdown_layer_info[field_name]
