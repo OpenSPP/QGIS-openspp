@@ -1015,6 +1015,8 @@ class OpenSppClient:
             self.PROCESS_SPATIAL_STATISTICS, inputs, use_blocking=use_blocking
         )
 
+    MAX_BATCH_SIZE = 100  # Server limit per request
+
     def query_statistics_batch(
         self,
         geometries: list,
@@ -1031,17 +1033,113 @@ class OpenSppClient:
         Each geometry is sent as an {id, value} object so results can be
         correlated back to inputs.
 
+        When more than MAX_BATCH_SIZE geometries are provided, the request
+        is split into chunks and the results are merged.
+
         Args:
             geometries: List of dicts with 'id' and 'geometry' keys
             filters: Additional filters (is_group, disabled, etc.)
             variables: List of CEL variable accessors to compute
             group_by: Disaggregation dimensions (e.g., ["gender", "age_group"])
             population_filter: Population filter (program, expression, mode)
+            on_progress: Callback for progress updates
             use_blocking: Use thread-safe HTTP (for background threads)
 
         Returns:
             Batch result with 'results' (per-geometry) and 'summary' (aggregate)
         """
+        if len(geometries) <= self.MAX_BATCH_SIZE:
+            return self._query_statistics_batch_single(
+                geometries,
+                filters=filters,
+                variables=variables,
+                group_by=group_by,
+                population_filter=population_filter,
+                on_progress=on_progress,
+                use_blocking=use_blocking,
+            )
+
+        # Split into chunks of MAX_BATCH_SIZE
+        chunks = [
+            geometries[i : i + self.MAX_BATCH_SIZE]
+            for i in range(0, len(geometries), self.MAX_BATCH_SIZE)
+        ]
+
+        all_results = []
+        total_geometries = len(geometries)
+        processed = 0
+
+        for chunk_idx, chunk in enumerate(chunks):
+            QgsMessageLog.logMessage(
+                f"Batch chunk {chunk_idx + 1}/{len(chunks)} "
+                f"({len(chunk)} geometries)",
+                "OpenSPP",
+                Qgis.Info,
+            )
+
+            def chunk_progress(status, progress, message):
+                # Scale progress: each chunk contributes proportionally
+                chunk_base = int(processed / total_geometries * 100)
+                chunk_share = int(len(chunk) / total_geometries * 100)
+                overall = chunk_base + int(progress * chunk_share / 100)
+                label = (
+                    f"Chunk {chunk_idx + 1}/{len(chunks)}"
+                    + (f": {message}" if message else "")
+                )
+                if on_progress:
+                    return on_progress(status, overall, label)
+                return True
+
+            chunk_result = self._query_statistics_batch_single(
+                chunk,
+                filters=filters,
+                variables=variables,
+                group_by=group_by,
+                population_filter=population_filter,
+                on_progress=chunk_progress,
+                use_blocking=use_blocking,
+            )
+
+            all_results.extend(chunk_result.get("results", []))
+            processed += len(chunk)
+
+        # Build merged summary from all results
+        summary = self._build_batch_summary(all_results)
+
+        return {"results": all_results, "summary": summary}
+
+    def _build_batch_summary(self, results: list) -> dict:
+        """Build a summary dict from merged batch results."""
+        total_count = 0
+        merged_stats = {}
+
+        for res in results:
+            total_count += res.get("total_count", 0)
+            for key, val in res.get("statistics", {}).items():
+                if isinstance(val, dict):
+                    continue
+                try:
+                    merged_stats[key] = merged_stats.get(key, 0) + float(val)
+                except (ValueError, TypeError):
+                    pass
+
+        return {
+            "total_count": total_count,
+            "geometries_queried": len(results),
+            "statistics": merged_stats,
+        }
+
+    def _query_statistics_batch_single(
+        self,
+        geometries: list,
+        filters: dict | None = None,
+        variables: list | None = None,
+        group_by: list | None = None,
+        population_filter: dict | None = None,
+        on_progress=None,
+        use_blocking: bool = False,
+    ) -> dict:
+        """Execute a single batch request (up to MAX_BATCH_SIZE geometries)."""
         # Transform from plugin format to OGC Processes format:
         # [{"id": x, "geometry": g}] -> [{"id": x, "value": g}]
         geometry_inputs = [

@@ -223,6 +223,122 @@ class TestQueryStatisticsBatch:
             assert call_kwargs["on_progress"] is progress_cb
 
 
+class TestBatchChunking:
+    """Test that large batches are split into chunks of MAX_BATCH_SIZE."""
+
+    def _make_client(self):
+        return OpenSppClient("https://test.example.com", "cid", "csecret")
+
+    def _make_geometries(self, count):
+        return [
+            {"id": f"zone_{i}", "geometry": {"type": "Polygon", "coordinates": []}}
+            for i in range(count)
+        ]
+
+    def test_batch_within_limit_sends_single_request(self):
+        """Batches <= MAX_BATCH_SIZE go as one request."""
+        client = self._make_client()
+        geometries = self._make_geometries(100)
+
+        with patch.object(client, "_execute_process", return_value={
+            "results": [{"id": f"zone_{i}", "total_count": 1, "statistics": {}} for i in range(100)],
+            "summary": {"total_count": 100, "geometries_queried": 100, "statistics": {}},
+        }) as mock_exec:
+            client.query_statistics_batch(geometries)
+            assert mock_exec.call_count == 1
+
+    def test_batch_exceeding_limit_sends_multiple_requests(self):
+        """Batches > MAX_BATCH_SIZE are split into chunks."""
+        client = self._make_client()
+        geometries = self._make_geometries(250)
+
+        chunk_results = {
+            "results": [{"id": "x", "total_count": 10, "statistics": {"total_households": 10}}],
+            "summary": {"total_count": 10, "geometries_queried": 1, "statistics": {}},
+        }
+
+        with patch.object(client, "_execute_process", return_value=chunk_results) as mock_exec:
+            result = client.query_statistics_batch(geometries)
+            # 250 geometries / 100 per chunk = 3 chunks
+            assert mock_exec.call_count == 3
+
+    def test_chunked_results_are_merged(self):
+        """Results from multiple chunks are merged into one list."""
+        client = self._make_client()
+        geometries = self._make_geometries(150)
+
+        call_count = [0]
+
+        def mock_execute(process_id, inputs, **kwargs):
+            call_count[0] += 1
+            n = len(inputs["geometry"])
+            return {
+                "results": [
+                    {"id": g["id"], "total_count": 5, "statistics": {"total_households": 5}}
+                    for g in inputs["geometry"]
+                ],
+                "summary": {"total_count": 5 * n, "geometries_queried": n, "statistics": {}},
+            }
+
+        with patch.object(client, "_execute_process", side_effect=mock_execute):
+            result = client.query_statistics_batch(geometries)
+
+            assert call_count[0] == 2  # 100 + 50
+            assert len(result["results"]) == 150
+            assert result["summary"]["total_count"] == 750  # 150 * 5
+            assert result["summary"]["geometries_queried"] == 150
+            assert result["summary"]["statistics"]["total_households"] == 750
+
+    def test_chunked_batch_forwards_params(self):
+        """Filters, variables, group_by, population_filter are sent to each chunk."""
+        client = self._make_client()
+        geometries = self._make_geometries(150)
+
+        calls = []
+
+        def mock_execute(process_id, inputs, **kwargs):
+            calls.append(inputs)
+            return {
+                "results": [{"id": "x", "total_count": 0, "statistics": {}}],
+                "summary": {},
+            }
+
+        with patch.object(client, "_execute_process", side_effect=mock_execute):
+            client.query_statistics_batch(
+                geometries,
+                filters={"is_group": True},
+                variables=["total_households"],
+                group_by=["gender"],
+                population_filter={"program": 5},
+            )
+
+            assert len(calls) == 2
+            for inputs in calls:
+                assert inputs["filters"] == {"is_group": True}
+                assert inputs["variables"] == ["total_households"]
+                assert inputs["group_by"] == ["gender"]
+                assert inputs["population_filter"] == {"program": 5}
+
+    def test_chunk_sizes_are_correct(self):
+        """Verify each chunk gets the right number of geometries."""
+        client = self._make_client()
+        geometries = self._make_geometries(250)
+
+        chunk_sizes = []
+
+        def mock_execute(process_id, inputs, **kwargs):
+            chunk_sizes.append(len(inputs["geometry"]))
+            return {
+                "results": [{"id": "x", "total_count": 0, "statistics": {}}],
+                "summary": {},
+            }
+
+        with patch.object(client, "_execute_process", side_effect=mock_execute):
+            client.query_statistics_batch(geometries)
+
+            assert chunk_sizes == [100, 100, 50]
+
+
 class TestGetPublishedStatistics:
     """Test OpenSppClient.get_published_statistics."""
 
