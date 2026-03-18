@@ -760,21 +760,43 @@ class TestGraduatedRendererClassification:
         # The 0-0 range at index 0 should be deleted
         renderer.deleteClass.assert_called_once_with(0)
 
-    def test_count_field_label_precision_zero(self):
+    def test_count_field_labels_no_decimals(self):
         """Count fields should display labels with 0 decimal places."""
         alg, mock_layer, renderer = self._make_alg_and_layer()
+
+        mock_r1 = MagicMock()
+        mock_r1.lowerValue.return_value = 0.0
+        mock_r1.upperValue.return_value = 9.0
+        mock_r2 = MagicMock()
+        mock_r2.lowerValue.return_value = 9.0
+        mock_r2.upperValue.return_value = 39.0
+        renderer.ranges.return_value = [mock_r1, mock_r2]
+
         alg._apply_graduated_renderer(mock_layer, "disagg_Male")
 
-        renderer.setLabelPrecision.assert_called_once_with(0)
-        renderer.updateRangeLabels.assert_called_once()
+        calls = renderer.updateRangeLabel.call_args_list
+        assert len(calls) == 2
+        assert calls[0] == ((0, "0 - 9"),)
+        assert calls[1] == ((1, "9 - 39"),)
 
-    def test_pct_field_label_precision_one(self):
+    def test_pct_field_labels_one_decimal(self):
         """Percentage fields should display labels with 1 decimal place."""
         alg, mock_layer, renderer = self._make_alg_and_layer()
+
+        mock_r1 = MagicMock()
+        mock_r1.lowerValue.return_value = 0.0
+        mock_r1.upperValue.return_value = 34.5455
+        mock_r2 = MagicMock()
+        mock_r2.lowerValue.return_value = 34.5455
+        mock_r2.upperValue.return_value = 48.4375
+        renderer.ranges.return_value = [mock_r1, mock_r2]
+
         alg._apply_graduated_renderer(mock_layer, "disagg_Male_pct")
 
-        renderer.setLabelPrecision.assert_called_once_with(1)
-        renderer.updateRangeLabels.assert_called_once()
+        calls = renderer.updateRangeLabel.call_args_list
+        assert len(calls) == 2
+        assert calls[0] == ((0, "0.0 - 34.5"),)
+        assert calls[1] == ((1, "34.5 - 48.4"),)
 
 
 class TestSpatialPopulationFilter:

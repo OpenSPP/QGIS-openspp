@@ -477,10 +477,13 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         for i in to_delete:
             renderer.deleteClass(i)
 
-        # Round labels: 1 decimal for percentages, 0 for counts.
-        precision = 1 if field_name.endswith("_pct") else 0
-        renderer.setLabelPrecision(precision)
-        renderer.updateRangeLabels()
+        # Round range labels for readability: 1 decimal for percentages,
+        # 0 for counts. Format each label from range boundaries.
+        fmt = ".1f" if field_name.endswith("_pct") else ".0f"
+        for i, r in enumerate(renderer.ranges()):
+            lo = format(r.lowerValue(), fmt)
+            hi = format(r.upperValue(), fmt)
+            renderer.updateRangeLabel(i, f"{lo} - {hi}")
 
         renderer.updateColorRamp(ramp)
         layer.setRenderer(renderer)
