@@ -137,7 +137,6 @@ def _create_mock_qgis_modules():
     core.QgsField = MagicMock
     core.QgsGraduatedSymbolRenderer = MagicMock()
     core.QgsGraduatedSymbolRenderer.Jenks = 0
-    core.QgsGraduatedSymbolRenderer.Quantile = 2
     core.QgsStyle = MagicMock()
     core.QgsStyle.defaultStyle = MagicMock(return_value=MagicMock())
     core.QgsSymbol = MagicMock()

@@ -709,7 +709,7 @@ class TestBreakdownStyles:
 
 
 class TestGraduatedRendererClassification:
-    """Test that _apply_graduated_renderer uses the right classification method."""
+    """Test _apply_graduated_renderer classification and zero-range removal."""
 
     def _make_alg_and_layer(self):
         from qgis.core import QgsGraduatedSymbolRenderer
@@ -728,24 +728,37 @@ class TestGraduatedRendererClassification:
 
         return alg, mock_layer, renderer_mock
 
-    def test_count_field_uses_jenks(self):
-        """Non-percentage fields should use Jenks natural breaks."""
+    def test_uses_jenks_classification(self):
+        """All fields should use Jenks natural breaks."""
         alg, mock_layer, renderer = self._make_alg_and_layer()
         alg._apply_graduated_renderer(mock_layer, "disagg_Male")
 
         renderer.updateClasses.assert_called_once()
         call_args = renderer.updateClasses.call_args[0]
-        # renderer.Jenks is the instance-level attribute used in production code
         assert call_args[1] is renderer.Jenks
 
-    def test_pct_field_uses_quantile(self):
-        """Percentage fields (_pct suffix) should use Quantile classification."""
-        alg, mock_layer, renderer = self._make_alg_and_layer()
-        alg._apply_graduated_renderer(mock_layer, "disagg_Male_pct")
+    def test_removes_all_zero_ranges(self):
+        """All 0-0 ranges should be removed, not just duplicates.
 
-        renderer.updateClasses.assert_called_once()
-        call_args = renderer.updateClasses.call_args[0]
-        assert call_args[1] is renderer.Quantile
+        Jenks often creates a "0 - 0" class when many features have
+        value 0. This wastes a color slot; zero-value features already
+        fall into the next range that starts at 0.
+        """
+        alg, mock_layer, renderer = self._make_alg_and_layer()
+
+        # Simulate Jenks producing: 0-0, 0-9, 9-19, 19-39, 39-104
+        mock_range_0_0 = MagicMock()
+        mock_range_0_0.lowerValue.return_value = 0
+        mock_range_0_0.upperValue.return_value = 0
+        mock_range_0_9 = MagicMock()
+        mock_range_0_9.lowerValue.return_value = 0
+        mock_range_0_9.upperValue.return_value = 9
+        renderer.ranges.return_value = [mock_range_0_0, mock_range_0_9]
+
+        alg._apply_graduated_renderer(mock_layer, "total_households")
+
+        # The 0-0 range at index 0 should be deleted
+        renderer.deleteClass.assert_called_once_with(0)
 
 
 class TestSpatialPopulationFilter:

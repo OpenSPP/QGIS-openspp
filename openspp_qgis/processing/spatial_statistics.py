@@ -464,20 +464,14 @@ class SpatialStatisticsAlgorithm(QgsProcessingAlgorithm):
         if ramp:
             renderer.setSourceColorRamp(ramp)
 
-        # Percentage fields use Quantile so features are evenly distributed
-        # across classes (gives visual contrast even when values cluster tightly).
-        # Count fields use Jenks natural breaks for data-driven class boundaries.
-        if field_name.endswith("_pct"):
-            mode = renderer.Quantile
-        else:
-            mode = renderer.Jenks
-        renderer.updateClasses(layer, mode, 5)
+        renderer.updateClasses(layer, renderer.Jenks, 5)
 
-        # Jenks can produce duplicate zero ranges (e.g. two "0 - 0" classes)
-        # when many features have a value of 0. Remove the extras.
+        # Jenks can produce "0 - 0" ranges when many features have value 0.
+        # These waste a color slot; zero-value features already fall into
+        # the next range whose lower bound is 0. Remove all of them.
         ranges = renderer.ranges()
         to_delete = []
-        for i in range(len(ranges) - 1, 0, -1):
+        for i in range(len(ranges) - 1, -1, -1):
             if ranges[i].lowerValue() == 0 and ranges[i].upperValue() == 0:
                 to_delete.append(i)
         for i in to_delete:
