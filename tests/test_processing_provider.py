@@ -708,6 +708,46 @@ class TestBreakdownStyles:
         mock_style_mgr.setCurrentStyle.assert_called_with("total_households")
 
 
+class TestGraduatedRendererClassification:
+    """Test that _apply_graduated_renderer uses the right classification method."""
+
+    def _make_alg_and_layer(self):
+        from qgis.core import QgsGraduatedSymbolRenderer
+
+        alg = SpatialStatisticsAlgorithm()
+        mock_layer = MagicMock()
+        mock_fields = MagicMock()
+        mock_fields.indexOf.return_value = 0  # field exists
+        mock_layer.fields.return_value = mock_fields
+
+        # Each call creates a fresh renderer mock so calls don't bleed
+        renderer_mock = MagicMock()
+        renderer_mock.ranges.return_value = []
+        QgsGraduatedSymbolRenderer.reset_mock()
+        QgsGraduatedSymbolRenderer.return_value = renderer_mock
+
+        return alg, mock_layer, renderer_mock
+
+    def test_count_field_uses_jenks(self):
+        """Non-percentage fields should use Jenks natural breaks."""
+        alg, mock_layer, renderer = self._make_alg_and_layer()
+        alg._apply_graduated_renderer(mock_layer, "disagg_Male")
+
+        renderer.updateClasses.assert_called_once()
+        call_args = renderer.updateClasses.call_args[0]
+        # renderer.Jenks is the instance-level attribute used in production code
+        assert call_args[1] is renderer.Jenks
+
+    def test_pct_field_uses_quantile(self):
+        """Percentage fields (_pct suffix) should use Quantile classification."""
+        alg, mock_layer, renderer = self._make_alg_and_layer()
+        alg._apply_graduated_renderer(mock_layer, "disagg_Male_pct")
+
+        renderer.updateClasses.assert_called_once()
+        call_args = renderer.updateClasses.call_args[0]
+        assert call_args[1] is renderer.Quantile
+
+
 class TestSpatialPopulationFilter:
     """Test population filter handling in SpatialStatisticsAlgorithm.
 
