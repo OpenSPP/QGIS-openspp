@@ -760,6 +760,22 @@ class TestGraduatedRendererClassification:
         # The 0-0 range at index 0 should be deleted
         renderer.deleteClass.assert_called_once_with(0)
 
+    def test_count_field_label_precision_zero(self):
+        """Count fields should display labels with 0 decimal places."""
+        alg, mock_layer, renderer = self._make_alg_and_layer()
+        alg._apply_graduated_renderer(mock_layer, "disagg_Male")
+
+        renderer.setLabelPrecision.assert_called_once_with(0)
+        renderer.updateRangeLabels.assert_called_once()
+
+    def test_pct_field_label_precision_one(self):
+        """Percentage fields should display labels with 1 decimal place."""
+        alg, mock_layer, renderer = self._make_alg_and_layer()
+        alg._apply_graduated_renderer(mock_layer, "disagg_Male_pct")
+
+        renderer.setLabelPrecision.assert_called_once_with(1)
+        renderer.updateRangeLabels.assert_called_once()
+
 
 class TestSpatialPopulationFilter:
     """Test population filter handling in SpatialStatisticsAlgorithm.
