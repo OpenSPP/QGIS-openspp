@@ -40,13 +40,35 @@ This plugin is a thin client:
 
 ### Development install (symlink)
 
+For development, symlink the plugin source into the QGIS plugins directory so that edits are picked up immediately (no re-install needed).
+
+**Using the helper script:**
+
 ```bash
 git clone https://github.com/OpenSPP/QGIS-openspp.git
 cd QGIS-openspp
 ./install-dev.sh
 ```
 
+**Manual symlink:**
+
+If the script doesn't detect your QGIS profile, create the symlink yourself. The target is the `openspp_qgis/` directory inside this repo.
+
+| Platform | Plugins directory |
+|----------|-------------------|
+| macOS    | `~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins/` |
+| Linux    | `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/` |
+| Windows  | `%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\` |
+
+```bash
+# Example (macOS):
+ln -sf /path/to/QGIS-openspp/openspp_qgis \
+  ~/Library/Application\ Support/QGIS/QGIS3/profiles/default/python/plugins/openspp_qgis
+```
+
 Then open QGIS and enable **OpenSPP GIS** in `Plugins` -> `Manage and Install Plugins` -> `Installed`.
+
+> **Tip:** If you use a non-default QGIS profile, replace `default` in the path with your profile name. You can find your active profile path via `Settings` -> `User Profiles` -> `Open Active Profile Folder`.
 
 ## Usage
 
