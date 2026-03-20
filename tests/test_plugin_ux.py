@@ -379,6 +379,109 @@ class TestConnectMenu:
         plugin.connect_menu.addSeparator.assert_called_once()
 
 
+class TestBboxRestrictionRemoval:
+    """Test automatic removal of restrictToRequestBBOX from OpenSPP layers.
+
+    When QGIS loads an OAPIF layer from the Browser panel, it sets
+    restrictToRequestBBOX='1' by default. This causes QGIS to send a
+    separate server request for each map render with the current view
+    extent, overwhelming the server with concurrent bbox-filtered
+    requests. For small collections, this is unnecessary; a single
+    request without bbox filtering fetches all features.
+    """
+
+    def test_strips_restrict_to_request_bbox(self):
+        """Removes restrictToRequestBBOX from OpenSPP OAPIF layer source."""
+        plugin = _make_plugin()
+        plugin.client = _make_client()
+        plugin.log = MagicMock()
+
+        layer = MagicMock()
+        layer.source.return_value = (
+            " restrictToRequestBBOX='1'"
+            " typename='MIS_DEMO_BENEFICIARY_DENSITY_adm2'"
+            " url='http://localhost:18887/api/v2/spp/gis/ogc'"
+        )
+        layer.providerType.return_value = "oapif"
+
+        with (
+            patch("openspp_qgis.openspp_plugin.isinstance", return_value=True),
+            patch.object(plugin.client, "get_layer_qml", return_value=None),
+        ):
+            plugin._on_layer_added(layer)
+
+        # Should call setDataSource with the bbox param stripped
+        layer.setDataSource.assert_called_once()
+        new_uri = layer.setDataSource.call_args[0][0]
+        assert "restrictToRequestBBOX" not in new_uri
+        assert "typename='MIS_DEMO_BENEFICIARY_DENSITY_adm2'" in new_uri
+        assert "url='http://localhost:18887/api/v2/spp/gis/ogc'" in new_uri
+
+    def test_strips_unquoted_restrict_to_request_bbox(self):
+        """Handles restrictToRequestBBOX=1 (without quotes) variant."""
+        plugin = _make_plugin()
+        plugin.client = _make_client()
+        plugin.log = MagicMock()
+
+        layer = MagicMock()
+        layer.source.return_value = (
+            "restrictToRequestBBOX=1"
+            " typename='LAYER'"
+            " url='http://example.com/api/v2/spp/gis/ogc'"
+        )
+        layer.providerType.return_value = "oapif"
+
+        with (
+            patch("openspp_qgis.openspp_plugin.isinstance", return_value=True),
+            patch.object(plugin.client, "get_layer_qml", return_value=None),
+        ):
+            plugin._on_layer_added(layer)
+
+        layer.setDataSource.assert_called_once()
+        new_uri = layer.setDataSource.call_args[0][0]
+        assert "restrictToRequestBBOX" not in new_uri
+
+    def test_no_setdatasource_when_no_bbox_restriction(self):
+        """Does not call setDataSource when restrictToRequestBBOX is absent."""
+        plugin = _make_plugin()
+        plugin.client = _make_client()
+        plugin.log = MagicMock()
+
+        layer = MagicMock()
+        layer.source.return_value = (
+            " typename='LAYER'"
+            " url='http://example.com/api/v2/spp/gis/ogc'"
+        )
+        layer.providerType.return_value = "oapif"
+
+        with (
+            patch("openspp_qgis.openspp_plugin.isinstance", return_value=True),
+            patch.object(plugin.client, "get_layer_qml", return_value=None),
+        ):
+            plugin._on_layer_added(layer)
+
+        layer.setDataSource.assert_not_called()
+
+    def test_non_openspp_layer_not_modified(self):
+        """Does not modify layers that are not from OpenSPP."""
+        plugin = _make_plugin()
+        plugin.client = _make_client()
+        plugin.log = MagicMock()
+
+        layer = MagicMock()
+        layer.source.return_value = (
+            " restrictToRequestBBOX='1'"
+            " typename='some_wfs_layer'"
+            " url='http://other-server.com/wfs'"
+        )
+        layer.providerType.return_value = "oapif"
+
+        with patch("openspp_qgis.openspp_plugin.isinstance", return_value=True):
+            plugin._on_layer_added(layer)
+
+        layer.setDataSource.assert_not_called()
+
+
 class TestUnload:
     """Test plugin unload cleanup."""
 
