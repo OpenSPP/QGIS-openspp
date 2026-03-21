@@ -23,6 +23,9 @@ htmlcov/
 .vscode/
 .idea/
 
+# Demo data (raw shapefiles, keep only GeoJSON)
+demo/TC20201111PHL_SHP/
+
 # OS files
 .DS_Store
 Thumbs.db
